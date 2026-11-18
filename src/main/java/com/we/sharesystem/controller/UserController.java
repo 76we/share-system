@@ -1,6 +1,7 @@
 package com.we.sharesystem.controller;
 
 import com.we.sharesystem.common.Result;
+import com.we.sharesystem.dto.LoginDTO;
 import com.we.sharesystem.dto.RegisterDTO;
 import com.we.sharesystem.service.UserService;
 import jakarta.validation.Valid;
@@ -21,5 +22,11 @@ public class UserController {
     public Result<Void> register(@RequestBody @Valid RegisterDTO dto){
         userService.register(dto);
         return Result.ok(null);
+    }
+
+    @PostMapping("/login")
+    public Result<String> login(@RequestBody @Valid LoginDTO dto){
+
+        return Result.ok(userService.login(dto));
     }
 }
