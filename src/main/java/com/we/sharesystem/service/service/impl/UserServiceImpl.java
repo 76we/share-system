@@ -7,7 +7,7 @@ import com.we.sharesystem.dto.RegisterDTO;
 import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.UserService;
-import com.we.sharesystem.utils.JwtUtils;
+import com.we.sharesystem.utils.JwtUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -21,7 +21,7 @@ public class UserServiceImpl implements UserService {
 
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
     @Autowired
-    private JwtUtils jwtUtils;
+    private JwtUtil jwtUtils;
 
     @Override
     public void register(RegisterDTO dto) {
