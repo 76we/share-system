@@ -25,11 +25,7 @@ public class MomentController {
                                 @RequestPart(value = "images",required = false) List<MultipartFile> images,
                                 HttpServletRequest request){
         Long userId = (Long) request.getAttribute("userId");
-        String firstImageUrl = null;
-        if(images!=null && !images.isEmpty()){
-            firstImageUrl = fileUtil.upload(images.get(0));
-        }
-        momentService.publish(dto,userId,firstImageUrl);
+        momentService.publish(dto,userId,images);
         return Result.ok(null);
     }
 }
