@@ -23,7 +23,7 @@ public class LoginInterceptor implements HandlerInterceptor {
         }
         try {
             Long userId = jwtUtil.getUserId(token);
-            request.setAttribute("UserId",userId);
+            request.setAttribute("userId",userId);
             return true;
         }catch (Exception e){
             response.setStatus(401);

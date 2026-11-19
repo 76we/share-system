@@ -16,7 +16,7 @@ public class Moment {
     private String title;
     private String content;
     private Long userId;
-    private Long topic;
+    private Long topicId;
     private String location;
     private String mood;
     private Integer viewCount;
