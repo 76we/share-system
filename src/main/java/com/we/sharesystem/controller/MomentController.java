@@ -2,14 +2,14 @@ package com.we.sharesystem.controller;
 
 import com.we.sharesystem.common.Result;
 import com.we.sharesystem.dto.MomentDTO;
+import com.we.sharesystem.entity.FileUtil;
 import com.we.sharesystem.service.MomentService;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/moments")
@@ -17,11 +17,19 @@ public class MomentController {
 
     @Autowired
     private MomentService momentService;
+    @Autowired
+    private FileUtil fileUtil;
 
-    @PostMapping
-    public Result<Void> publish(@RequestBody @Valid MomentDTO dto, HttpServletRequest request){
+    @PostMapping(consumes = "mutipart/form-data")
+    public Result<Void> publish(@RequestPart("dto") MomentDTO dto,
+                                @RequestPart(value = "images",required = false) List<MultipartFile> images,
+                                HttpServletRequest request){
         Long userId = (Long) request.getAttribute("userId");
-        momentService.publish(dto,userId);
+        String firstImageUrl = null;
+        if(images!=null && !images.isEmpty()){
+            firstImageUrl = fileUtil.upload(images.get(0));
+        }
+        momentService.publish(dto,userId,firstImageUrl);
         return Result.ok(null);
     }
 }
