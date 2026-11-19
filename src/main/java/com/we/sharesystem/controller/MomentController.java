@@ -1,9 +1,11 @@
 package com.we.sharesystem.controller;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.Result;
 import com.we.sharesystem.dto.MomentDTO;
 import com.we.sharesystem.entity.FileUtil;
 import com.we.sharesystem.service.MomentService;
+import com.we.sharesystem.vo.MomentVO;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -27,5 +29,12 @@ public class MomentController {
         Long userId = (Long) request.getAttribute("userId");
         momentService.publish(dto,userId,images);
         return Result.ok(null);
+    }
+    @GetMapping("/list")
+    public Result<Page<MomentVO>> list(@RequestParam(defaultValue = "1") Integer page,
+                                       @RequestParam(defaultValue = "10") Integer size,
+                                       @RequestParam(required = false) Long topicId,
+                                       @RequestParam(defaultValue = "new") String sort){
+        return Result.ok(momentService.list(page, size, topicId, sort));
     }
 }
