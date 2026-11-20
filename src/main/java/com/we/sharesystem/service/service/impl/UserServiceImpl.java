@@ -12,6 +12,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 @Service
 public class UserServiceImpl implements UserService {
 
@@ -49,5 +54,14 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException("用户名或密码错误");
         }
         return jwtUtils.generateToken(user.getId());
+    }
+
+    @Override
+    public Map<Long, User> getUserMapByIds(Set<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return new HashMap<>();
+        }
+        return userMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
     }
 }

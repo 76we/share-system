@@ -16,6 +16,12 @@ public class LoginInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        // CORS 预检请求（OPTIONS）不携带 Authorization，直接放行，
+        // 否则浏览器预检失败，所有带自定义头的跨域请求都会被拒
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            return true;
+        }
         String token = request.getHeader("Authorization");
         if(token==null || token.isBlank()){
             response.setStatus(401);

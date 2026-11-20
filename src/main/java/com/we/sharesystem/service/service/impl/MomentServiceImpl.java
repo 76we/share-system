@@ -2,6 +2,7 @@ package com.we.sharesystem.service.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.we.sharesystem.common.BusinessException;
 import com.we.sharesystem.dto.MomentDTO;
 import com.we.sharesystem.entity.FileUtil;
 import com.we.sharesystem.entity.Moment;
@@ -10,7 +11,9 @@ import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentImageMapper;
 import com.we.sharesystem.mapper.MomentMapper;
 import com.we.sharesystem.mapper.UserMapper;
+import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.MomentService;
+import com.we.sharesystem.vo.MomentDetailVO;
 import com.we.sharesystem.vo.MomentVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +38,8 @@ public class MomentServiceImpl implements MomentService {
     private FileUtil fileUtil;
     @Autowired
     private UserMapper userMapper;
+    @Autowired
+    private MomentCommentService commentService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -42,7 +47,7 @@ public class MomentServiceImpl implements MomentService {
         List<String> uploaded = new ArrayList<>();
         try {
             if(images!=null && images.size()>9){
-                throw new RuntimeException("最多上传9张图片");
+                throw new BusinessException("最多上传9张图片");
             }
             Moment moment = new Moment();
             moment.setTitle(dto.getTitle());
@@ -112,18 +117,42 @@ public class MomentServiceImpl implements MomentService {
 
         List<MomentVO> vos = records.stream().map(m -> {
             MomentVO vo = new MomentVO();
-            BeanUtils.copyProperties(m, vo);
-            User u = userMap.get(m.getUserId());
-            if (u != null) {
-                vo.setNickname(u.getNickname());
-                vo.setAvatar(u.getAvatar());
-            }
-            vo.setImages(imageMap.getOrDefault(m.getId(), new ArrayList<>()));
+            fillBase(vo, m, userMap.get(m.getUserId()), imageMap.get(m.getId()));
             return vo;
         }).toList();
 
         result.setRecords(vos);
         return result;
+    }
+
+    @Override
+    public MomentDetailVO detail(Long id) {
+        Moment m = momentMapper.selectById(id);
+        if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
+            throw new BusinessException("动态不存在或已删除");
+        }
+
+        MomentDetailVO vo = new MomentDetailVO();
+        User user = userMapper.selectById(m.getUserId());
+        List<String> images = momentImageMapper.selectList(
+                new LambdaQueryWrapper<MomentImage>()
+                        .eq(MomentImage::getMomentId, id)
+                        .orderByAsc(MomentImage::getSortOrder))
+                .stream().map(MomentImage::getUrl).toList();
+        fillBase(vo, m, user, images);
+
+        vo.setComments(commentService.getCommentTree(id));
+        return vo;
+    }
+
+    // 装配动态基础信息（作者昵称头像 + 图片列表），列表与详情共用
+    private void fillBase(MomentVO vo, Moment m, User user, List<String> images) {
+        BeanUtils.copyProperties(m, vo);
+        if (user != null) {
+            vo.setNickname(user.getNickname());
+            vo.setAvatar(user.getAvatar());
+        }
+        vo.setImages(images == null ? new ArrayList<>() : images);
     }
 
 }
