@@ -1,9 +1,12 @@
 package com.we.sharesystem.service.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.we.sharesystem.dto.CommentAddDTO;
+import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentComment;
 import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentCommentMapper;
+import com.we.sharesystem.mapper.MomentMapper;
 import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.UserService;
 import com.we.sharesystem.vo.CommentVO;
@@ -20,6 +23,9 @@ public class MomentCommentServiceImpl implements MomentCommentService {
 
     @Resource
     private MomentCommentMapper commentMapper;
+
+    @Resource
+    private MomentMapper momentMapper;
 
     @Resource
     private UserService userService;
@@ -48,6 +54,21 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         comment.setStatus(1);
 
         commentMapper.insert(comment);
+        // 重算并回写动态的评论数（评论为逻辑删除，按 status=1 实际数量统计最稳妥）
+        refreshMomentCommentCount(dto.getMomentId());
+    }
+
+    /**
+     * 按 status=1 的真实评论数重算 moment.comment_count，供热度榜使用。
+     */
+    private void refreshMomentCommentCount(Long momentId) {
+        Long count = commentMapper.selectCount(new LambdaQueryWrapper<MomentComment>()
+                .eq(MomentComment::getMomentId, momentId)
+                .eq(MomentComment::getStatus, 1));
+        Moment moment = new Moment();
+        moment.setId(momentId);
+        moment.setCommentCount(count == null ? 0 : count.intValue());
+        momentMapper.updateById(moment);
     }
 
     @Override
@@ -130,5 +151,7 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         // 逻辑删除
         comment.setStatus(0);
         commentMapper.updateById(comment);
+        // 重算并回写动态的评论数
+        refreshMomentCommentCount(comment.getMomentId());
     }
 }

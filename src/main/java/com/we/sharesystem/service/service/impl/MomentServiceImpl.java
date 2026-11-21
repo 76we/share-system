@@ -19,14 +19,17 @@ import com.we.sharesystem.vo.MomentDetailVO;
 import com.we.sharesystem.vo.MomentVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
@@ -44,6 +47,8 @@ public class MomentServiceImpl implements MomentService {
     private TopicMapper topicMapper;
     @Autowired
     private MomentCommentService commentService;
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -86,19 +91,49 @@ public class MomentServiceImpl implements MomentService {
 
     @Override
     public Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort) {
-        Page<Moment> req = new Page<>(page, size);
+        boolean hot = "hot".equals(sort);
         LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
         qw.eq(Moment::getStatus, 1);
         if (topicId != null) qw.eq(Moment::getTopicId, topicId);
-        if ("hot".equals(sort)) {
-            qw.last("ORDER BY like_count * 2 + comment_count * 3 + collect_count DESC");
+
+        final Map<Long, Integer> likeCountMap;
+        final Map<Long, Integer> collectCountMap;
+
+        List<Moment> records;
+        long total;
+
+        if (hot) {
+            // 热度榜：点赞/收藏计数在 Redis、不回写 moment 表，SQL 的 ORDER BY 拿不到真实值。
+            // 故全量查出候选 → 从 Redis 批量取真实计数 → 内存算分排序 → 手动分页，保证全局名次正确。
+            List<Moment> all = momentMapper.selectList(qw);
+            final Map<Long, Integer> likes = batchCount(all, id -> "like:count:1:" + id);   // targetType=1 表示动态
+            final Map<Long, Integer> collects = batchCount(all, id -> "collect:count:" + id);
+            all.sort((a, b) -> {
+                int sa = hotScore(a, likes, collects);
+                int sb = hotScore(b, likes, collects);
+                if (sa != sb) return Integer.compare(sb, sa);            // 分数降序
+                if (a.getCreateTime() != null && b.getCreateTime() != null) {
+                    return b.getCreateTime().compareTo(a.getCreateTime()); // 同分按时间倒序
+                }
+                return 0;
+            });
+            likeCountMap = likes;
+            collectCountMap = collects;
+            total = all.size();
+            int from = (int) Math.min((long) (page - 1) * size, total);
+            int to = (int) Math.min(from + (long) size, total);
+            records = from >= to ? new ArrayList<>() : new ArrayList<>(all.subList(from, to));
         } else {
+            // 最新榜：按创建时间倒序，交给 MyBatis-Plus 分页
+            likeCountMap = Collections.emptyMap();
+            collectCountMap = Collections.emptyMap();
             qw.orderByDesc(Moment::getCreateTime);
+            Page<Moment> p = momentMapper.selectPage(new Page<>(page, size), qw);
+            total = p.getTotal();
+            records = p.getRecords();
         }
 
-        Page<Moment> p = momentMapper.selectPage(req, qw);
-        Page<MomentVO> result = new Page<>(p.getCurrent(), p.getSize(), p.getTotal());
-        List<Moment> records = p.getRecords();
+        Page<MomentVO> result = new Page<>(page, size, total);
         if (records.isEmpty()) {
             result.setRecords(new ArrayList<>());
             return result;
@@ -122,11 +157,45 @@ public class MomentServiceImpl implements MomentService {
         List<MomentVO> vos = records.stream().map(m -> {
             MomentVO vo = new MomentVO();
             fillBase(vo, m, userMap.get(m.getUserId()), imageMap.get(m.getId()));
+            if (hot) {
+                // 热度榜把计数填成 Redis 真实值，保证列表展示与排序依据一致
+                vo.setLikeCount(likeCountMap.getOrDefault(m.getId(), 0));
+                vo.setCollectCount(collectCountMap.getOrDefault(m.getId(), 0));
+            }
             return vo;
         }).toList();
 
         result.setRecords(vos);
         return result;
+    }
+
+    /** 批量从 Redis 取计数，key 缺失按 0 计（避免逐条查询 N+1） */
+    private Map<Long, Integer> batchCount(List<Moment> moments, Function<Long, String> keyFn) {
+        if (moments.isEmpty()) return Collections.emptyMap();
+        List<String> keys = moments.stream().map(m -> keyFn.apply(m.getId())).toList();
+        List<Object> vals = redisTemplate.opsForValue().multiGet(keys);
+        Map<Long, Integer> map = new HashMap<>();
+        for (int i = 0; i < moments.size(); i++) {
+            Object v = (vals == null) ? null : vals.get(i);
+            int c = 0;
+            if (v != null) {
+                try {
+                    c = Integer.parseInt(v.toString());
+                } catch (NumberFormatException ignored) {
+                    // 非法值按 0 处理
+                }
+            }
+            map.put(moments.get(i).getId(), c);
+        }
+        return map;
+    }
+
+    /** 热度 = 点赞*2 + 评论*3 + 收藏 */
+    private int hotScore(Moment m, Map<Long, Integer> likeMap, Map<Long, Integer> collectMap) {
+        int like = likeMap.getOrDefault(m.getId(), 0);
+        int collect = collectMap.getOrDefault(m.getId(), 0);
+        int comment = m.getCommentCount() == null ? 0 : m.getCommentCount();
+        return like * 2 + comment * 3 + collect;
     }
 
     @Override
