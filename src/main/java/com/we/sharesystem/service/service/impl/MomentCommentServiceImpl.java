@@ -44,13 +44,6 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         comment.setParentId(dto.getParentId() == null ? 0 : dto.getParentId());
         comment.setReplyUserId(dto.getReplyUserId());
         comment.setContent(dto.getContent().trim());
-
-
-
-
-
-
-
         comment.setLikeCount(0);
         comment.setStatus(1);
 

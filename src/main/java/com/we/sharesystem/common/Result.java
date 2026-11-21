@@ -29,4 +29,5 @@ public class Result<T> {
         r.setMessage(message);
         return r;
     }
+
 }
