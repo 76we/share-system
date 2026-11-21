@@ -10,6 +10,7 @@ import java.util.List;
 
 public interface MomentService {
     void publish(MomentDTO dto, Long userId, List<MultipartFile> imageUrl);
-    Page<MomentVO> list(Integer page,Integer size,Long topicId,String sort);
+    /** 动态列表 / 搜索：keyword 非空时按标题/正文/地点匹配 */
+    Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword);
     MomentDetailVO detail(Long id);
 }

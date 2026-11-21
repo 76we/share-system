@@ -35,8 +35,20 @@ public class MomentController {
     public Result<Page<MomentVO>> list(@RequestParam(defaultValue = "1") Integer page,
                                        @RequestParam(defaultValue = "10") Integer size,
                                        @RequestParam(required = false) Long topicId,
-                                       @RequestParam(defaultValue = "new") String sort){
-        return Result.ok(momentService.list(page, size, topicId, sort));
+                                       @RequestParam(defaultValue = "new") String sort,
+                                       @RequestParam(required = false) String keyword){
+        return Result.ok(momentService.list(page, size, topicId, sort, keyword));
+    }
+
+    /**
+     * 搜索动态：按关键词匹配标题 / 正文 / 地点
+     */
+    @GetMapping("/search")
+    public Result<Page<MomentVO>> search(@RequestParam(defaultValue = "1") Integer page,
+                                         @RequestParam(defaultValue = "10") Integer size,
+                                         @RequestParam(required = false) String keyword,
+                                         @RequestParam(defaultValue = "new") String sort){
+        return Result.ok(momentService.list(page, size, null, sort, keyword));
     }
 
     /**

@@ -90,11 +90,18 @@ public class MomentServiceImpl implements MomentService {
     }
 
     @Override
-    public Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort) {
+    public Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword) {
         boolean hot = "hot".equals(sort);
         LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
         qw.eq(Moment::getStatus, 1);
         if (topicId != null) qw.eq(Moment::getTopicId, topicId);
+        // 关键词搜索：标题 / 正文 / 地点 任一匹配即可（OR）
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String kw = keyword.trim();
+            qw.and(w -> w.like(Moment::getTitle, kw)
+                         .or().like(Moment::getContent, kw)
+                         .or().like(Moment::getLocation, kw));
+        }
 
         final Map<Long, Integer> likeCountMap;
         final Map<Long, Integer> collectCountMap;
@@ -133,6 +140,16 @@ public class MomentServiceImpl implements MomentService {
             records = p.getRecords();
         }
 
+        return assembleVOs(records, page, size, total, hot ? likeCountMap : null,
+                hot ? collectCountMap : null);
+    }
+
+    /**
+     * 把动态记录装配为 VO 分页结果（列表 / 搜索共用）。
+     * 批量查用户与图片避免 N+1；计数映射非空时用 Redis 真实值覆盖（热度榜）。
+     */
+    private Page<MomentVO> assembleVOs(List<Moment> records, Integer page, Integer size, long total,
+                                       Map<Long, Integer> likeCountMap, Map<Long, Integer> collectCountMap) {
         Page<MomentVO> result = new Page<>(page, size, total);
         if (records.isEmpty()) {
             result.setRecords(new ArrayList<>());
@@ -154,11 +171,11 @@ public class MomentServiceImpl implements MomentService {
                 Collectors.mapping(MomentImage::getUrl, Collectors.toList())
         ));
 
+        boolean useRedisCount = likeCountMap != null && collectCountMap != null;
         List<MomentVO> vos = records.stream().map(m -> {
             MomentVO vo = new MomentVO();
             fillBase(vo, m, userMap.get(m.getUserId()), imageMap.get(m.getId()));
-            if (hot) {
-                // 热度榜把计数填成 Redis 真实值，保证列表展示与排序依据一致
+            if (useRedisCount) {
                 vo.setLikeCount(likeCountMap.getOrDefault(m.getId(), 0));
                 vo.setCollectCount(collectCountMap.getOrDefault(m.getId(), 0));
             }
