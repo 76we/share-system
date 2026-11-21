@@ -58,4 +58,25 @@ public class MomentController {
     public Result<MomentDetailVO> detail(@PathVariable Long id){
         return Result.ok(momentService.detail(id));
     }
+
+    /**
+     * 更新动态（仅作者），更新后删除缓存
+     */
+    @PutMapping("/{id}")
+    public Result<Void> update(@PathVariable Long id, @RequestBody MomentDTO dto,
+                               HttpServletRequest request){
+        Long userId = (Long) request.getAttribute("userId");
+        momentService.update(id, dto, userId);
+        return Result.ok(null);
+    }
+
+    /**
+     * 删除动态（仅作者，逻辑删除），删除后清理缓存
+     */
+    @DeleteMapping("/{id}")
+    public Result<Void> delete(@PathVariable Long id, HttpServletRequest request){
+        Long userId = (Long) request.getAttribute("userId");
+        momentService.delete(id, userId);
+        return Result.ok(null);
+    }
 }

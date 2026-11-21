@@ -25,7 +25,6 @@ public class WebConfig implements WebMvcConfigurer {
                         "/topics/**",
                         "/moments/list",
                         "/moments/search",
-                        "/moments/{id}",
                         "/likes/count",
                         "/collects/count",
                         "/images/**",

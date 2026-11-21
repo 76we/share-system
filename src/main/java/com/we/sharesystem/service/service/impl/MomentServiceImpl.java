@@ -13,6 +13,7 @@ import com.we.sharesystem.mapper.MomentImageMapper;
 import com.we.sharesystem.mapper.MomentMapper;
 import com.we.sharesystem.mapper.TopicMapper;
 import com.we.sharesystem.mapper.UserMapper;
+import com.we.sharesystem.service.MomentCacheService;
 import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.MomentService;
 import com.we.sharesystem.vo.MomentDetailVO;
@@ -49,6 +50,8 @@ public class MomentServiceImpl implements MomentService {
     private MomentCommentService commentService;
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+    @Autowired
+    private MomentCacheService cacheService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -87,10 +90,21 @@ public class MomentServiceImpl implements MomentService {
             throw e;
         }
 
+        // 发布新动态后，所有列表缓存都失效（新内容应出现在最新榜/各筛选页）
+        cacheService.evictAllLists();
     }
 
     @Override
     public Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword) {
+        // 缓存命中直接返回（第一次查 MySQL 回填，第二次走 Redis）
+        String cacheKey = cacheService.listKey(page, size, topicId, sort, keyword);
+        MomentCacheService.CachedList cached = cacheService.getList(cacheKey);
+        if (cached != null) {
+            Page<MomentVO> hit = new Page<>(page, size, cached.getTotal());
+            hit.setRecords(cached.getRecords());
+            return hit;
+        }
+
         boolean hot = "hot".equals(sort);
         LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
         qw.eq(Moment::getStatus, 1);
@@ -140,8 +154,14 @@ public class MomentServiceImpl implements MomentService {
             records = p.getRecords();
         }
 
-        return assembleVOs(records, page, size, total, hot ? likeCountMap : null,
+        Page<MomentVO> result = assembleVOs(records, page, size, total, hot ? likeCountMap : null,
                 hot ? collectCountMap : null);
+        // 回填缓存：只存 records + total，避免序列化 MyBatis-Plus 的 Page
+        MomentCacheService.CachedList toCache = new MomentCacheService.CachedList();
+        toCache.setRecords(result.getRecords());
+        toCache.setTotal(result.getTotal());
+        cacheService.putList(cacheKey, toCache);
+        return result;
     }
 
     /**
@@ -217,6 +237,12 @@ public class MomentServiceImpl implements MomentService {
 
     @Override
     public MomentDetailVO detail(Long id) {
+        // 缓存命中直接返回（第一次查 MySQL 回填，第二次走 Redis）
+        MomentDetailVO cached = cacheService.getDetail(id);
+        if (cached != null) {
+            return cached;
+        }
+
         Moment m = momentMapper.selectById(id);
         if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
             throw new BusinessException("动态不存在或已删除");
@@ -232,7 +258,47 @@ public class MomentServiceImpl implements MomentService {
         fillBase(vo, m, user, images);
 
         vo.setComments(commentService.getCommentTree(id));
+        cacheService.putDetail(id, vo);
         return vo;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void update(Long id, MomentDTO dto, Long userId) {
+        Moment m = momentMapper.selectById(id);
+        if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
+            throw new BusinessException("动态不存在或已删除");
+        }
+        if (!m.getUserId().equals(userId)) {
+            throw new BusinessException("无权限修改该动态");
+        }
+        m.setTitle(dto.getTitle());
+        m.setContent(dto.getContent());
+        m.setLocation(dto.getLocation());
+        m.setMood(dto.getMood());
+        Long topicId = resolveTopicId(dto);
+        if (topicId != null) {
+            m.setTopicId(topicId);
+        }
+        momentMapper.updateById(m);
+        // 更新后删除缓存：详情缓存 + 全部列表缓存
+        cacheService.evictMoment(id);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void delete(Long id, Long userId) {
+        Moment m = momentMapper.selectById(id);
+        if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
+            throw new BusinessException("动态不存在或已删除");
+        }
+        if (!m.getUserId().equals(userId)) {
+            throw new BusinessException("无权限修改该动态");
+        }
+        m.setStatus(0);
+        momentMapper.updateById(m);
+        // 删除后清理缓存
+        cacheService.evictMoment(id);
     }
 
     /**

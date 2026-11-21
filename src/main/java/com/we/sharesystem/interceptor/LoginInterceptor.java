@@ -22,6 +22,12 @@ public class LoginInterceptor implements HandlerInterceptor {
             response.setStatus(HttpServletResponse.SC_OK);
             return true;
         }
+        // 动态详情为公开只读接口：GET /moments/{id} 放行；
+        // 同路径的 PUT/DELETE（更新/删除）仍需登录，由后续 token 校验拦截
+        if ("GET".equalsIgnoreCase(request.getMethod())
+                && request.getRequestURI().matches(".*/moments/\\d+")) {
+            return true;
+        }
         String token = request.getHeader("Authorization");
         if(token==null || token.isBlank()){
             response.setStatus(401);

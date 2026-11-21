@@ -7,6 +7,7 @@ import com.we.sharesystem.entity.MomentComment;
 import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentCommentMapper;
 import com.we.sharesystem.mapper.MomentMapper;
+import com.we.sharesystem.service.MomentCacheService;
 import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.UserService;
 import com.we.sharesystem.vo.CommentVO;
@@ -29,6 +30,9 @@ public class MomentCommentServiceImpl implements MomentCommentService {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private MomentCacheService cacheService;
 
     // 敏感词简单拦截（可扩展词库）
     private final List<String> BAD_WORD = Arrays.asList("垃圾", "傻逼", "脏话", "违规词");
@@ -56,6 +60,8 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         commentMapper.insert(comment);
         // 重算并回写动态的评论数（评论为逻辑删除，按 status=1 实际数量统计最稳妥）
         refreshMomentCommentCount(dto.getMomentId());
+        // 评论树和评论数都变了：删详情缓存 + 清列表缓存（热度榜按评论数排序）
+        cacheService.evictMoment(dto.getMomentId());
     }
 
     /**
@@ -153,5 +159,7 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         commentMapper.updateById(comment);
         // 重算并回写动态的评论数
         refreshMomentCommentCount(comment.getMomentId());
+        // 同步失效缓存
+        cacheService.evictMoment(comment.getMomentId());
     }
 }
