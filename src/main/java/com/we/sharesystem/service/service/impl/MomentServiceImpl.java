@@ -7,9 +7,11 @@ import com.we.sharesystem.dto.MomentDTO;
 import com.we.sharesystem.entity.FileUtil;
 import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentImage;
+import com.we.sharesystem.entity.Topic;
 import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentImageMapper;
 import com.we.sharesystem.mapper.MomentMapper;
+import com.we.sharesystem.mapper.TopicMapper;
 import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.MomentService;
@@ -39,6 +41,8 @@ public class MomentServiceImpl implements MomentService {
     @Autowired
     private UserMapper userMapper;
     @Autowired
+    private TopicMapper topicMapper;
+    @Autowired
     private MomentCommentService commentService;
 
     @Override
@@ -52,7 +56,7 @@ public class MomentServiceImpl implements MomentService {
             Moment moment = new Moment();
             moment.setTitle(dto.getTitle());
             moment.setContent(dto.getContent());
-            moment.setTopicId(dto.getTopicId());
+            moment.setTopicId(resolveTopicId(dto));
             moment.setLocation(dto.getLocation());
             moment.setMood(dto.getMood());
             moment.setUserId(userId);
@@ -143,6 +147,29 @@ public class MomentServiceImpl implements MomentService {
 
         vo.setComments(commentService.getCommentTree(id));
         return vo;
+    }
+
+    /**
+     * 解析话题 id：前端"其它"自定义话题传了 topicName 时，按名称查话题，
+     * 不存在则新建（这样自定义话题会进入 topic 表，首页筛选 tab 自动出现）；
+     * 未传自定义名则沿用前端选中的 topicId。
+     */
+    private Long resolveTopicId(MomentDTO dto) {
+        String name = dto.getTopicName();
+        if (name == null || name.isBlank()) {
+            return dto.getTopicId();
+        }
+        name = name.trim();
+        Topic exist = topicMapper.selectOne(
+                new LambdaQueryWrapper<Topic>().eq(Topic::getName, name).last("limit 1"));
+        if (exist != null) {
+            return exist.getId();
+        }
+        Topic topic = new Topic();
+        topic.setName(name);
+        topic.setDescription("用户自定义话题");
+        topicMapper.insert(topic);
+        return topic.getId();
     }
 
     // 装配动态基础信息（作者昵称头像 + 图片列表），列表与详情共用

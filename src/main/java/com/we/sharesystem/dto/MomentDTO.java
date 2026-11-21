@@ -11,6 +11,8 @@ public class MomentDTO {
     private String content;
 
     private Long topicId;
+    /** 自定义话题名（前端"其它"输入），传了则按名称查/建话题，优先于 topicId */
+    private String topicName;
     private String location;
     private String mood;
 }
