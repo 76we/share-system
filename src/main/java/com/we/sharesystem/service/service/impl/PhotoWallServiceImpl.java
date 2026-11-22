@@ -9,6 +9,7 @@ import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentImageMapper;
 import com.we.sharesystem.mapper.MomentMapper;
 import com.we.sharesystem.mapper.UserMapper;
+import com.we.sharesystem.service.FriendshipService;
 import com.we.sharesystem.service.LikeService;
 import com.we.sharesystem.service.PhotoWallService;
 import com.we.sharesystem.vo.PhotoMonthGroupVO;
@@ -45,6 +46,7 @@ public class PhotoWallServiceImpl implements PhotoWallService {
     private final MomentImageMapper momentImageMapper;
     private final UserMapper userMapper;
     private final LikeService likeService;
+    private final FriendshipService friendshipService;
 
     @Override
     public Page<WallPhotoVO> myPhotos(Long userId, Integer page, Integer size) {
@@ -76,14 +78,12 @@ public class PhotoWallServiceImpl implements PhotoWallService {
         if (ownerId.equals(viewerId)) {
             return photosByOwner(ownerId, viewerId, page, size);
         }
-        // 他人看：先看墙主是否存在，再看是否公开
+        // 他人看：先看墙主是否存在，再按可见性判断是否放行
         User owner = userMapper.selectById(ownerId);
         if (owner == null) {
             throw new BusinessException("用户不存在");
         }
-        if (!Integer.valueOf(1).equals(owner.getWallVisibility())) {
-            throw new BusinessException("TA 的照片墙是私密的，暂时无法查看");
-        }
+        assertCanView(owner, viewerId);
         // ownerId 决定看谁的照片，viewerId 决定点赞状态（我是否已赞）
         return photosByOwner(ownerId, viewerId, page, size);
     }
@@ -121,9 +121,7 @@ public class PhotoWallServiceImpl implements PhotoWallService {
             if (owner == null) {
                 throw new BusinessException("用户不存在");
             }
-            if (!Integer.valueOf(1).equals(owner.getWallVisibility())) {
-                throw new BusinessException("TA 的照片墙是私密的，暂时无法查看");
-            }
+            assertCanView(owner, viewerId);
             moments = myMoments(ownerId);
         }
         return groupByMonth(assembleAll(moments, viewerId, false));
@@ -241,8 +239,8 @@ public class PhotoWallServiceImpl implements PhotoWallService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void setVisibility(Long userId, Integer visibility) {
-        if (visibility == null || (visibility != 0 && visibility != 1)) {
-            throw new BusinessException("可见性只能是 0（私密）或 1（公开）");
+        if (visibility == null || (visibility != 0 && visibility != 1 && visibility != 2)) {
+            throw new BusinessException("可见性只能是 0（私密）、1（公开）或 2（仅好友）");
         }
         User user = userMapper.selectById(userId);
         if (user == null) {
@@ -250,6 +248,26 @@ public class PhotoWallServiceImpl implements PhotoWallService {
         }
         user.setWallVisibility(visibility);
         userMapper.updateById(user);
+    }
+
+    /**
+     * 他人访问照片墙时的可见性校验：
+     * 0 私密 → 拒绝；1 公开 → 放行；2 仅好友 → 是好友放行，否则拒绝。
+     * 本人看自己的场景由调用方（ownerId.equals(viewerId)）先拦下，不会走到这里。
+     */
+    private void assertCanView(User owner, Long viewerId) {
+        Integer visibility = owner.getWallVisibility() == null ? 0 : owner.getWallVisibility();
+        if (visibility == 1) {
+            return;
+        }
+        if (visibility == 2) {
+            if (friendshipService.isFriend(viewerId, owner.getId())) {
+                return;
+            }
+            throw new BusinessException("TA 的照片墙仅对好友开放，先添加 TA 为好友吧");
+        }
+        // visibility == 0
+        throw new BusinessException("TA 的照片墙是私密的，暂时无法查看");
     }
 
     /** 查某用户的照片并装配分页；ownerId=照片主人，viewerId=当前查看者（用于点赞状态） */

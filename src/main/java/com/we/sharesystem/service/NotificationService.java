@@ -15,6 +15,12 @@ public interface NotificationService {
     /** 评论埋点：一级评论通知动态作者，回复通知被回复人 */
     void onComment(Long actorId, Long momentId, Long replyUserId, String content);
 
+    /** 好友申请埋点：actorId 向 targetId 发起申请，通知 targetId。type=5 */
+    void onFriendRequest(Long actorId, Long targetId);
+
+    /** 好友申请被同意：actorId 同意了 targetId 的申请，通知 targetId。type=6 */
+    void onFriendAccepted(Long actorId, Long targetId);
+
     /** 我的通知列表（分页，含发起人信息） */
     Page<NotificationVO> listMine(Long userId, Integer page, Integer size);
 

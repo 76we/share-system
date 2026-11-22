@@ -75,14 +75,14 @@ public class PhotoWallController {
         return Result.ok(photoWallService.yearPhotosGrouped(userId, year));
     }
 
-    /** GET /profile/photos/visibility —— 读取我的照片墙可见性（0私密 1公开） */
+    /** GET /profile/photos/visibility —— 读取我的照片墙可见性（0私密 1公开 2仅好友） */
     @GetMapping("/visibility")
     public Result<Integer> getVisibility(HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
         return Result.ok(photoWallService.getVisibility(userId));
     }
 
-    /** PUT /profile/photos/visibility?visibility=1 —— 设置我的照片墙可见性（0私密 1公开） */
+    /** PUT /profile/photos/visibility?visibility=2 —— 设置我的照片墙可见性（0私密 1公开 2仅好友） */
     @PutMapping("/visibility")
     public Result<Void> setVisibility(HttpServletRequest request,
                                       @RequestParam Integer visibility) {

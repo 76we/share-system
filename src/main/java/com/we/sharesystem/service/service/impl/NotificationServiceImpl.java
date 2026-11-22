@@ -98,6 +98,20 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void onFriendRequest(Long actorId, Long targetId) {
+        if (actorId == null || targetId == null || actorId.equals(targetId)) return;
+        insert(targetId, actorId, 5, actorId, "向你发起了好友申请");
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void onFriendAccepted(Long actorId, Long targetId) {
+        if (actorId == null || targetId == null || actorId.equals(targetId)) return;
+        insert(targetId, actorId, 6, actorId, "同意了你的好友申请");
+    }
+
+    @Override
     public Page<NotificationVO> listMine(Long userId, Integer page, Integer size) {
         Page<Notification> p = notificationMapper.selectPage(
                 new Page<>(page, size),
