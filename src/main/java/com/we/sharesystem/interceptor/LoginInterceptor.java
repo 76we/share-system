@@ -1,6 +1,7 @@
 package com.we.sharesystem.interceptor;
 
 
+import com.we.sharesystem.service.TokenVersionService;
 import com.we.sharesystem.utils.JwtUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -13,6 +14,9 @@ public class LoginInterceptor implements HandlerInterceptor {
 
     @Autowired
     private JwtUtil jwtUtil;
+
+    @Autowired
+    private TokenVersionService tokenVersionService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -47,14 +51,13 @@ public class LoginInterceptor implements HandlerInterceptor {
             response.setStatus(401);
             return false;
         }
-        try {
-            Long userId = jwtUtil.getUserId(token);
-            request.setAttribute("userId",userId);
-            return true;
-        }catch (Exception e){
+        Long userId = verify(token);
+        if (userId == null) {
             response.setStatus(401);
             return false;
         }
+        request.setAttribute("userId",userId);
+        return true;
     }
 
     /** 从 Authorization 头取 token，兼容裸 token 与标准的 "Bearer xxx" */
@@ -75,10 +78,31 @@ public class LoginInterceptor implements HandlerInterceptor {
         if (token == null || token.isBlank()) {
             return;
         }
+        Long userId = verify(token);
+        if (userId != null) {
+            request.setAttribute("userId", userId);
+        }
+    }
+
+    /**
+     * 校验 token 并返回 userId；不合法返回 null。
+     *
+     * 除了签名与过期时间，还要比对「密码版本号」：
+     * 用户改密码 / 重置密码后 user.token_version 会 +1，
+     * 手里那些旧 token 的 tv 与当前版本对不上，于是立刻失效 —— 这是 JWT 唯一的回收手段。
+     */
+    private Long verify(String token) {
         try {
-            request.setAttribute("userId", jwtUtil.getUserId(token));
-        } catch (Exception ignored) {
-            // token 失效/被改：当游客处理即可
+            Long userId = jwtUtil.getUserId(token);
+            Integer tv = jwtUtil.getTokenVersion(token);
+            int current = tokenVersionService.current(userId);
+            if (tv == null || tv.intValue() != current) {
+                return null;
+            }
+            return userId;
+        } catch (Exception e) {
+            // 签名错、过期、格式坏、用户不存在：一律当未登录
+            return null;
         }
     }
 }

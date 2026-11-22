@@ -21,6 +21,8 @@ public class User {
     private Integer status;
     /** 照片墙可见性：0=私密（默认，仅自己可见），1=公开，2=仅好友 */
     private Integer wallVisibility;
+    /** token 版本号：改密码 / 重置密码后 +1，旧 token 立刻失效 */
+    private Integer tokenVersion;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

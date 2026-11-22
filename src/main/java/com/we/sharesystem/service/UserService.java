@@ -12,7 +12,8 @@ import java.util.Set;
 public interface UserService {
     void register(RegisterDTO dto);
 
-    String login(LoginDTO dto);
+    /** 登录：ip 用于失败限流，避免同一网络下轮换账号爆破 */
+    String login(LoginDTO dto, String ip);
 
     void resetPassword(ResetPasswordDTO dto);
 

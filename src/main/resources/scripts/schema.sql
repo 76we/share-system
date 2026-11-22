@@ -162,11 +162,11 @@ CREATE TABLE `user` (
   `bio` varchar(500) DEFAULT NULL COMMENT '个人简介',
   `status` tinyint DEFAULT '1' COMMENT '1正常 0禁用',
   `wall_visibility` tinyint NOT NULL DEFAULT '0' COMMENT '照片墙可见性 0私密 1公开',
+  `token_version` int NOT NULL DEFAULT '0' COMMENT 'token 版本号，改密码后 +1 使旧 token 失效',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_username` (`username`),
-  UNIQUE KEY `uk_email` (`email`),
   UNIQUE KEY `uk_email` (`email`)
 ) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户表';
 /*!40101 SET character_set_client = @saved_cs_client */;

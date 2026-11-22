@@ -35,8 +35,11 @@ public class MomentCacheService {
 
     private static final String DETAIL_PREFIX = "moment:detail:";
     private static final String LIST_PREFIX = "moment:list:";
+    /** 空值标记：不存在的 id 也缓存一小会儿，挡住"拿随机 id 反复打库"的穿透 */
+    private static final String NIL_PREFIX = "moment:nil:";
     private static final Duration DETAIL_TTL = Duration.ofMinutes(30);
     private static final Duration LIST_TTL = Duration.ofMinutes(5);
+    private static final Duration NIL_TTL = Duration.ofSeconds(60);
 
     /** 独立 ObjectMapper：注册 JavaTimeModule 以正确处理 LocalDateTime */
     private final ObjectMapper mapper = new ObjectMapper()
@@ -78,6 +81,36 @@ public class MomentCacheService {
 
     public void evictDetail(Long id) {
         redis.delete(DETAIL_PREFIX + id);
+        // 详情有了变动就顺手清掉空值标记，避免"刚发布的动态被判不存在"
+        redis.delete(NIL_PREFIX + id);
+    }
+
+    /**
+     * 该 id 是否已被判定为「不存在」。
+     * TTL 只给 60 秒：既能挡住短时间内的重复打库，又不会把"之后真的发布了"误判太久。
+     */
+    public boolean isNil(Long id) {
+        if (id == null) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(redis.hasKey(NIL_PREFIX + id));
+        } catch (Exception e) {
+            log.warn("读取空值标记失败 id={}: {}", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 把查不到的 id 记下来（含已删除的），后续 60 秒内直接判不存在，不再打库 */
+    public void markNil(Long id) {
+        if (id == null) {
+            return;
+        }
+        try {
+            redis.opsForValue().set(NIL_PREFIX + id, "1", NIL_TTL);
+        } catch (Exception e) {
+            log.warn("写入空值标记失败 id={}: {}", id, e.getMessage());
+        }
     }
 
     /** 清除全部列表缓存：动态内容/评论数变化会影响任意分页与筛选，用 SCAN 增量删除，避免 KEYS 阻塞 */

@@ -371,11 +371,16 @@ public class MomentServiceImpl implements MomentService {
 
     @Override
     public MomentDetailVO detail(Long id, String visitor) {
+        // 已经被判定为不存在的 id：60 秒内直接拒，不再打库（挡缓存穿透）
+        if (cacheService.isNil(id)) {
+            throw new BusinessException("动态不存在或已删除");
+        }
         // 缓存命中直接用（内容 + 评论树），计数另外现算
         MomentDetailVO vo = cacheService.getDetail(id);
         if (vo == null) {
             Moment m = momentMapper.selectById(id);
             if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
+                cacheService.markNil(id);
                 throw new BusinessException("动态不存在或已删除");
             }
 

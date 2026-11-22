@@ -15,6 +15,7 @@ import com.we.sharesystem.mapper.UserLikeMapper;
 import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.MomentService;
 import com.we.sharesystem.service.ProfileService;
+import com.we.sharesystem.service.TokenVersionService;
 import com.we.sharesystem.vo.MomentVO;
 import com.we.sharesystem.vo.UserProfileVO;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +36,7 @@ public class ProfileServiceImpl implements ProfileService {
     private final UserLikeMapper userLikeMapper;
     private final UserCollectMapper userCollectMapper;
     private final MomentService momentService;
+    private final TokenVersionService tokenVersionService;
     private final com.we.sharesystem.common.SensitiveWordFilter sensitiveWordFilter;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
@@ -138,6 +140,8 @@ public class ProfileServiceImpl implements ProfileService {
         }
         user.setPassword(encoder.encode(dto.getNewPassword()));
         userMapper.updateById(user);
+        // 改密码后旧 token 全部失效：盗号者拿到的 token 也跟着作废
+        tokenVersionService.bump(userId);
     }
 
     @Override
