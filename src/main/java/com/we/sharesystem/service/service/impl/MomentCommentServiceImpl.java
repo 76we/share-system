@@ -38,17 +38,15 @@ public class MomentCommentServiceImpl implements MomentCommentService {
     @Resource
     private NotificationService notificationService;
 
-    // 敏感词简单拦截（可扩展词库）
-    private final List<String> BAD_WORD = Arrays.asList("垃圾", "傻逼", "脏话", "违规词");
+    @Resource
+    private com.we.sharesystem.common.SensitiveWordFilter sensitiveWordFilter;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void addComment(CommentAddDTO dto, Long loginUserId) {
-        // 1.敏感词校验
-        for (String word : BAD_WORD) {
-            if (dto.getContent().contains(word)) {
-                throw new RuntimeException("评论包含违规内容！");
-            }
+        // 1.敏感词校验：词库在 resources/sensitive-words.txt（DFA 匹配，O(n)）
+        if (sensitiveWordFilter.hit(dto.getContent())) {
+            throw new com.we.sharesystem.common.BusinessException("评论包含不合规词汇，请修改后再发");
         }
 
         // 2.构造数据

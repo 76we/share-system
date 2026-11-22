@@ -1,6 +1,7 @@
 package com.we.sharesystem.service.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.BusinessException;
 import com.we.sharesystem.dto.MomentDTO;
@@ -25,6 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -60,9 +63,20 @@ public class MomentServiceImpl implements MomentService {
     @Autowired
     private com.we.sharesystem.service.FriendshipService friendshipService;
 
+    @Autowired
+    private com.we.sharesystem.common.SensitiveWordFilter sensitiveWordFilter;
+
+    /** 内容合规兜底：标题与正文任一命中敏感词即拒绝，不告诉用户命中了哪个词 */
+    private void validateContent(String title, String content) {
+        if (sensitiveWordFilter.hit(title) || sensitiveWordFilter.hit(content)) {
+            throw new com.we.sharesystem.common.BusinessException("内容包含不合规词汇，请修改后再发布");
+        }
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void publish(MomentDTO dto, Long userId, List<MultipartFile> images) {
+        validateContent(dto.getTitle(), dto.getContent());
         List<String> uploaded = new ArrayList<>();
         try {
             if(images!=null && images.size()>9){
@@ -112,7 +126,10 @@ public class MomentServiceImpl implements MomentService {
         MomentCacheService.CachedList cached = cacheService.getList(cacheKey);
         if (cached != null) {
             Page<MomentVO> hit = new Page<>(page, size, cached.getTotal());
-            hit.setRecords(cached.getRecords());
+            List<MomentVO> hitRecords = new ArrayList<>(cached.getRecords());
+            // 缓存只存内容快照，计数每次用 Redis 实时值覆盖，否则点赞后列表数字不动
+            applyRealCounts(hitRecords);
+            hit.setRecords(hitRecords);
             return hit;
         }
 
@@ -172,6 +189,8 @@ public class MomentServiceImpl implements MomentService {
         toCache.setRecords(result.getRecords());
         toCache.setTotal(result.getTotal());
         cacheService.putList(cacheKey, toCache);
+        // 返回前统一用 Redis 计数覆盖（最新榜原本只读 DB，会滞后）
+        applyRealCounts(result.getRecords());
         return result;
     }
 
@@ -271,7 +290,10 @@ public class MomentServiceImpl implements MomentService {
         boolean useRedisCount = likeCountMap != null && collectCountMap != null;
         List<MomentVO> vos = records.stream().map(m -> {
             MomentVO vo = new MomentVO();
-            fillBase(vo, m, userMap.get(m.getUserId()), imageMap.get(m.getId()));
+            // 列表只给缩略图（720px），原图留给详情页；老图没有缩略图时 thumbUrl 会回退原图
+            List<String> imgs = imageMap.get(m.getId());
+            fillBase(vo, m, userMap.get(m.getUserId()),
+                    imgs == null ? null : imgs.stream().map(fileUtil::thumbUrl).toList());
             if (useRedisCount) {
                 vo.setLikeCount(likeCountMap.getOrDefault(m.getId(), 0));
                 vo.setCollectCount(collectCountMap.getOrDefault(m.getId(), 0));
@@ -304,6 +326,36 @@ public class MomentServiceImpl implements MomentService {
         return map;
     }
 
+    /**
+     * 用 Redis 里的实时计数覆盖 VO 的点赞/收藏数。
+     * 列表缓存（含个人中心、搜索）会把计数一起快照进去，缓存 TTL 内数字就冻住了；
+     * 这里每次返回前批量取一次 Redis 真值。Redis 里没有该 key（如重启后未回填）时，
+     * 保留 VO 原值（来自 DB），避免冷启动把真实数字显示成 0。
+     */
+    private void applyRealCounts(List<MomentVO> vos) {
+        if (vos == null || vos.isEmpty()) return;
+        List<String> likeKeys = vos.stream().map(v -> "like:count:1:" + v.getId()).toList();
+        List<String> collectKeys = vos.stream().map(v -> "collect:count:" + v.getId()).toList();
+        List<Object> likeVals = redisTemplate.opsForValue().multiGet(likeKeys);
+        List<Object> collectVals = redisTemplate.opsForValue().multiGet(collectKeys);
+        for (int i = 0; i < vos.size(); i++) {
+            Integer like = readCount(likeVals, i);
+            if (like != null) vos.get(i).setLikeCount(like);
+            Integer collect = readCount(collectVals, i);
+            if (collect != null) vos.get(i).setCollectCount(collect);
+        }
+    }
+
+    /** 取第 i 个 Redis 计数值；越界/缺失/非法一律返回 null（表示"无权威值，别覆盖"） */
+    private Integer readCount(List<Object> vals, int i) {
+        if (vals == null || i >= vals.size() || vals.get(i) == null) return null;
+        try {
+            return Integer.parseInt(vals.get(i).toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     /** 热度 = 点赞*2 + 评论*3 + 收藏 */
     private int hotScore(Moment m, Map<Long, Integer> likeMap, Map<Long, Integer> collectMap) {
         int like = likeMap.getOrDefault(m.getId(), 0);
@@ -314,29 +366,65 @@ public class MomentServiceImpl implements MomentService {
 
     @Override
     public MomentDetailVO detail(Long id) {
-        // 缓存命中直接返回（第一次查 MySQL 回填，第二次走 Redis）
-        MomentDetailVO cached = cacheService.getDetail(id);
-        if (cached != null) {
-            return cached;
+        return detail(id, null);
+    }
+
+    @Override
+    public MomentDetailVO detail(Long id, String visitor) {
+        // 缓存命中直接用（内容 + 评论树），计数另外现算
+        MomentDetailVO vo = cacheService.getDetail(id);
+        if (vo == null) {
+            Moment m = momentMapper.selectById(id);
+            if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
+                throw new BusinessException("动态不存在或已删除");
+            }
+
+            vo = new MomentDetailVO();
+            User user = userMapper.selectById(m.getUserId());
+            List<String> images = momentImageMapper.selectList(
+                    new LambdaQueryWrapper<MomentImage>()
+                            .eq(MomentImage::getMomentId, id)
+                            .orderByAsc(MomentImage::getSortOrder))
+                    .stream().map(MomentImage::getUrl).toList();
+            fillBase(vo, m, user, images);
+
+            vo.setComments(commentService.getCommentTree(id));
+            cacheService.putDetail(id, vo);
         }
-
-        Moment m = momentMapper.selectById(id);
-        if (m == null || !Integer.valueOf(1).equals(m.getStatus())) {
-            throw new BusinessException("动态不存在或已删除");
-        }
-
-        MomentDetailVO vo = new MomentDetailVO();
-        User user = userMapper.selectById(m.getUserId());
-        List<String> images = momentImageMapper.selectList(
-                new LambdaQueryWrapper<MomentImage>()
-                        .eq(MomentImage::getMomentId, id)
-                        .orderByAsc(MomentImage::getSortOrder))
-                .stream().map(MomentImage::getUrl).toList();
-        fillBase(vo, m, user, images);
-
-        vo.setComments(commentService.getCommentTree(id));
-        cacheService.putDetail(id, vo);
+        // 浏览量每次返回实时值（缓存里那份是快照，不能直接用）
+        vo.setViewCount((int) recordView(id, visitor));
         return vo;
+    }
+
+    /**
+     * 记一次浏览并返回实时浏览量。
+     * 去重：同一访客同一天只算一次（key 带日期，过期 2 天自然回收）。
+     * 计数权威在 Redis，DB 只做持久化落账；任何异常都不影响详情页打开。
+     */
+    private long recordView(Long momentId, String visitor) {
+        String countKey = "view:count:" + momentId;
+        try {
+            if (redisTemplate.opsForValue().get(countKey) == null) {
+                Moment m = momentMapper.selectById(momentId);
+                long base = (m == null || m.getViewCount() == null) ? 0L : m.getViewCount();
+                redisTemplate.opsForValue().setIfAbsent(countKey, base);
+            }
+            if (visitor != null && !visitor.isBlank()) {
+                String dedupKey = "view:dedup:" + momentId + ":" + LocalDate.now();
+                Long added = redisTemplate.opsForSet().add(dedupKey, visitor);
+                if (added != null && added > 0) {
+                    redisTemplate.expire(dedupKey, Duration.ofDays(2));
+                    redisTemplate.opsForValue().increment(countKey);
+                    momentMapper.update(null, Wrappers.<Moment>lambdaUpdate()
+                            .eq(Moment::getId, momentId)
+                            .setSql("view_count = view_count + 1"));
+                }
+            }
+            Object v = redisTemplate.opsForValue().get(countKey);
+            return v == null ? 0L : Long.parseLong(v.toString());
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
     @Override
@@ -349,6 +437,7 @@ public class MomentServiceImpl implements MomentService {
         if (!m.getUserId().equals(userId)) {
             throw new BusinessException("无权限修改该动态");
         }
+        validateContent(dto.getTitle(), dto.getContent());
         m.setTitle(dto.getTitle());
         m.setContent(dto.getContent());
         m.setLocation(dto.getLocation());
@@ -397,8 +486,18 @@ public class MomentServiceImpl implements MomentService {
         Topic topic = new Topic();
         topic.setName(name);
         topic.setDescription("用户自定义话题");
-        topicMapper.insert(topic);
-        return topic.getId();
+        try {
+            topicMapper.insert(topic);
+            return topic.getId();
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // 并发下另一个请求已建同名话题（topic.name 有唯一索引）：重查复用，避免重复话题
+            Topic again = topicMapper.selectOne(
+                    new LambdaQueryWrapper<Topic>().eq(Topic::getName, name).last("limit 1"));
+            if (again != null) {
+                return again.getId();
+            }
+            throw new BusinessException("话题创建失败，请重试");
+        }
     }
 
     // 装配动态基础信息（作者昵称头像 + 图片列表），列表与详情共用

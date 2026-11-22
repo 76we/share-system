@@ -19,6 +19,12 @@ public interface MomentService {
     /** 按动态 id 集合查询并保持传入顺序（个人中心点赞/收藏，不走缓存） */
     Page<MomentVO> listByMomentIds(java.util.List<Long> ids, Integer page, Integer size);
     MomentDetailVO detail(Long id);
+
+    /**
+     * 动态详情（带浏览量统计）。visitor 为去重标识（登录用 u{userId}，游客用 IP），
+     * 同一标识同一天只计一次浏览。传 null 则只读不计数（供分享页等内部调用）。
+     */
+    MomentDetailVO detail(Long id, String visitor);
     /** 更新动态（仅作者），更新后失效缓存 */
     void update(Long id, MomentDTO dto, Long userId);
     /** 删除动态（仅作者，逻辑删除），删除后失效缓存 */

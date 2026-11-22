@@ -8,6 +8,22 @@ spring:
     multipart:
       max-file-size: 5MB
       max-request-size: 20MB
+  # 注册验证码邮件：QQ 邮箱 SMTP。账号与授权码走环境变量，未配置时退化为「日志打印验证码」本地联调模式
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:465}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_AUTH_CODE:}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          connectiontimeout: 8000
+          timeout: 8000
+          writetimeout: 8000
 
 mybatis-plus:
   configuration:
@@ -18,4 +34,13 @@ mybatis-plus:
 file:
   upload-dir: ${UPLOAD_DIR:D:/uploads/}
   url-prefix: /images/
+
+app:
+  share:
+    # 分享卡片里的绝对地址根（og:url / og:image）。留空则按请求自动推导
+    base-url: ${SHARE_BASE_URL:}
+  mail:
+    # 发件人显示名与地址；留空时取 spring.mail.username
+    from-name: ${MAIL_FROM_NAME:尘叙阁}
+    from: ${MAIL_FROM:}
 

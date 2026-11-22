@@ -33,11 +33,18 @@ public class WebConfig implements WebMvcConfigurer {
                 .excludePathPatterns(
                         "/users/register",
                         "/users/login",
+                        // 注册邮箱验证码：未登录也必须能请求
+                        "/users/email-code",
+                        // 找回密码：未登录也必须能请求
+                        "/users/password-code",
+                        "/users/reset-password",
                         "/moments/list",
                         "/moments/search",
                         "/likes/count",
                         "/collects/count",
                         "/images/**",
+                        // 分享落地页必须匿名可访问：微信爬虫不会带 token
+                        "/share/**",
                         "/error"
                 );
     }

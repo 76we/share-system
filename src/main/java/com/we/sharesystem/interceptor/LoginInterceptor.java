@@ -23,9 +23,11 @@ public class LoginInterceptor implements HandlerInterceptor {
             return true;
         }
         // 动态详情为公开只读接口：GET /moments/{id} 放行；
-        // 同路径的 PUT/DELETE（更新/删除）仍需登录，由后续 token 校验拦截
+        // 同路径的 PUT/DELETE（更新/删除）仍需登录，由后续 token 校验拦截。
+        // 带了合法 token 时仍解析出 userId（浏览量按用户去重需要），解析失败不影响访问
         if ("GET".equalsIgnoreCase(request.getMethod())
                 && request.getRequestURI().matches(".*/moments/\\d+")) {
+            attachUserIdIfPresent(request);
             return true;
         }
         // 话题列表为公开只读接口：GET /topics 放行；
@@ -34,14 +36,13 @@ public class LoginInterceptor implements HandlerInterceptor {
                 && request.getRequestURI().matches(".*/topics(/?|/\\d+)")) {
             return true;
         }
-        String token = request.getHeader("Authorization");
-        // 兼容两种写法：裸 token（前端现有实现）与标准 "Bearer xxx"（curl / Postman / 第三方调用）
-        if (token != null) {
-            token = token.trim();
-            if (token.regionMatches(true, 0, "Bearer ", 0, 7)) {
-                token = token.substring(7).trim();
-            }
+        // 评论列表为公开只读接口：GET /comments 放行（游客看动态详情也该看到评论）；
+        // 同路径的 POST/DELETE（发表/删除评论）仍需登录
+        if ("GET".equalsIgnoreCase(request.getMethod())
+                && request.getRequestURI().matches(".*/comments(/?.*)")) {
+            return true;
         }
+        String token = resolveToken(request);
         if(token==null || token.isBlank()){
             response.setStatus(401);
             return false;
@@ -53,6 +54,31 @@ public class LoginInterceptor implements HandlerInterceptor {
         }catch (Exception e){
             response.setStatus(401);
             return false;
+        }
+    }
+
+    /** 从 Authorization 头取 token，兼容裸 token 与标准的 "Bearer xxx" */
+    private String resolveToken(HttpServletRequest request) {
+        String token = request.getHeader("Authorization");
+        if (token != null) {
+            token = token.trim();
+            if (token.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                token = token.substring(7).trim();
+            }
+        }
+        return token;
+    }
+
+    /** 公开接口上：带了合法 token 就顺带解析出 userId，失败静默忽略 */
+    private void attachUserIdIfPresent(HttpServletRequest request) {
+        String token = resolveToken(request);
+        if (token == null || token.isBlank()) {
+            return;
+        }
+        try {
+            request.setAttribute("userId", jwtUtil.getUserId(token));
+        } catch (Exception ignored) {
+            // token 失效/被改：当游客处理即可
         }
     }
 }

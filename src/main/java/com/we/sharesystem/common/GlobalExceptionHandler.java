@@ -93,6 +93,13 @@ public class GlobalExceptionHandler {
         return Result.fail(400, "参数 " + e.getName() + " 的格式不正确");
     }
 
+    /** 服务层主动抛出的参数问题（如点赞 targetType 非法），按 400 返回而非 500 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Result<Void> handleIllegalArgument(IllegalArgumentException e) {
+        log.warn("参数不合法：{}", e.getMessage());
+        return Result.fail(400, e.getMessage() == null ? "参数不合法" : e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public Result<Void> handleSystem(Exception e) {
         log.error("未捕获异常", e);

@@ -35,6 +35,7 @@ public class ProfileServiceImpl implements ProfileService {
     private final UserLikeMapper userLikeMapper;
     private final UserCollectMapper userCollectMapper;
     private final MomentService momentService;
+    private final com.we.sharesystem.common.SensitiveWordFilter sensitiveWordFilter;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     @Override
@@ -113,6 +114,10 @@ public class ProfileServiceImpl implements ProfileService {
             if (count != null && count > 0) {
                 throw new BusinessException("该邮箱已被使用");
             }
+        }
+        // 昵称与简介会公开展示，同样过一遍词库
+        if (sensitiveWordFilter.hit(dto.getNickname()) || sensitiveWordFilter.hit(dto.getBio())) {
+            throw new BusinessException("昵称或简介包含不合规词汇，请修改后再保存");
         }
         if (dto.getNickname() != null) user.setNickname(dto.getNickname().isBlank() ? user.getUsername() : dto.getNickname().trim());
         if (dto.getAvatar() != null) user.setAvatar(dto.getAvatar().isBlank() ? null : dto.getAvatar().trim());

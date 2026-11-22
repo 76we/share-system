@@ -43,6 +43,9 @@ public class CollectServiceImpl implements CollectService {
 
     @Override
     public Integer collect(Long userId, Long momentId) {
+        if (momentId == null || momentId <= 0) {
+            throw new IllegalArgumentException("收藏目标不合法");
+        }
         String relKey = "collect:rel:" + momentId;
         String countKey = "collect:count:" + momentId;
 
@@ -51,24 +54,40 @@ public class CollectServiceImpl implements CollectService {
         int op = res.intValue();
 
         // 异步落库，不阻塞接口
-        asyncExecutor.execute(() -> {
-            if (op == 1) {
-                UserCollect c = new UserCollect();
-                c.setUserId(userId);
-                c.setMomentId(momentId);
-                try {
-                    collectMapper.insert(c);
-                } catch (DuplicateKeyException e) {
-                    // 唯一索引冲突=已存在，幂等忽略
-                }
-            } else if (op == -1) {
-                LambdaQueryWrapper<UserCollect> wrapper = Wrappers.lambdaQuery(UserCollect.class)
-                        .eq(UserCollect::getUserId, userId)
-                        .eq(UserCollect::getMomentId, momentId);
-                collectMapper.delete(wrapper);
-            }
-        });
+        asyncExecutor.execute(() -> syncToDb(userId, momentId));
         return op;
+    }
+
+    /**
+     * 以 Redis 为权威对账（与点赞同款）。
+     * 原来按 op 决定 insert / delete，异步线程池不保证顺序：
+     * 快速「收藏 → 取消」会乱序执行，DB 可能停在和 Redis 相反的状态，
+     * 表现就是「取消收藏了，刷新后又出现」。改为任务执行时重读 Redis 现状再对齐。
+     */
+    private void syncToDb(Long userId, Long momentId) {
+        String relKey = "collect:rel:" + momentId;
+        boolean collected = Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(relKey, userId.toString()));
+
+        LambdaQueryWrapper<UserCollect> wrapper = Wrappers.lambdaQuery(UserCollect.class)
+                .eq(UserCollect::getUserId, userId)
+                .eq(UserCollect::getMomentId, momentId);
+
+        if (collected) {
+            Long exist = collectMapper.selectCount(wrapper);
+            if (exist != null && exist > 0) {
+                return; // 已存在，幂等跳过
+            }
+            UserCollect c = new UserCollect();
+            c.setUserId(userId);
+            c.setMomentId(momentId);
+            try {
+                collectMapper.insert(c);
+            } catch (DuplicateKeyException e) {
+                // 唯一索引冲突=已存在，幂等忽略
+            }
+        } else {
+            collectMapper.delete(wrapper);
+        }
     }
 
     @Override

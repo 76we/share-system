@@ -20,5 +20,7 @@ public class MomentVO {
     private  Integer likeCount;
     private Integer commentCount;
     private Integer collectCount;
+    /** 浏览量：以 Redis 去重计数为准，detail 接口每次返回实时值 */
+    private Integer viewCount;
     private LocalDateTime createTime;
 }

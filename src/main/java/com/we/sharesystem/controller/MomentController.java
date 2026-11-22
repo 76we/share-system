@@ -64,11 +64,27 @@ public class MomentController {
     }
 
     /**
-     * 动态详情（含作者、图片、评论树）
+     * 动态详情（含作者、图片、评论树、实时浏览量）
      */
     @GetMapping("/{id}")
-    public Result<MomentDetailVO> detail(@PathVariable Long id){
-        return Result.ok(momentService.detail(id));
+    public Result<MomentDetailVO> detail(@PathVariable Long id, HttpServletRequest request){
+        return Result.ok(momentService.detail(id, visitorOf(request)));
+    }
+
+    /**
+     * 浏览量去重标识：登录用户按 u{userId}，游客退化到 IP。
+     * 同一标识同一天只计一次（service 层用 Redis SET 去重）。
+     */
+    private String visitorOf(HttpServletRequest request) {
+        Long uid = (Long) request.getAttribute("userId");
+        if (uid != null) {
+            return "u" + uid;
+        }
+        String xff = request.getHeader("X-Forwarded-For");
+        String ip = (xff != null && !xff.isBlank())
+                ? xff.split(",")[0].trim()
+                : request.getRemoteAddr();
+        return "ip" + ip;
     }
 
     /**

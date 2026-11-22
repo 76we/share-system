@@ -48,6 +48,10 @@ jwt:
 app:
   cors:
     allowed-origins: ${CORS_ORIGINS:}
+  share:
+    # 分享卡片的绝对地址根，上线必配，例如 https://chenxu.example.com
+    # 不配也能跑：会按请求头自动推导（但 nginx 后要保证 X-Forwarded-Proto 已透传）
+    base-url: ${SHARE_BASE_URL:}
 
 # 生产关闭 SQL 打印，避免日志爆炸与数据泄漏
 mybatis-plus:
