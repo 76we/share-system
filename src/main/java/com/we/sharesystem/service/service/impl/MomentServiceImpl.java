@@ -165,6 +165,51 @@ public class MomentServiceImpl implements MomentService {
     }
 
     /**
+     * 某用户发布的动态（个人中心）。按创建时间倒序，直接查库不走缓存，
+     * 保证发布/删除后立即反映在个人中心。
+     */
+    @Override
+    public Page<MomentVO> listByUser(Long userId, Integer page, Integer size) {
+        LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
+        qw.eq(Moment::getStatus, 1).eq(Moment::getUserId, userId)
+          .orderByDesc(Moment::getCreateTime);
+        Page<Moment> p = momentMapper.selectPage(new Page<>(page, size), qw);
+        return assembleVOs(p.getRecords(), page, size, p.getTotal(), null, null);
+    }
+
+    /**
+     * 按给定动态 id 集合查询（个人中心「我点赞/我收藏」）。
+     * 保持传入 ids 的顺序（关系表按时间倒序）；分页在 ids 层面手动切分，
+     * 再批量查动态并装配 VO。过滤掉已删除(status!=1)或已不存在的动态。
+     */
+    @Override
+    public Page<MomentVO> listByMomentIds(List<Long> ids, Integer page, Integer size) {
+        if (ids == null || ids.isEmpty()) {
+            return new Page<>(page, size, 0);
+        }
+        long total = ids.size();
+        int from = (int) Math.min((long) (page - 1) * size, total);
+        int to = (int) Math.min(from + (long) size, total);
+        List<Long> slice = from >= to ? new ArrayList<>() : ids.subList(from, to);
+        if (slice.isEmpty()) {
+            Page<MomentVO> empty = new Page<>(page, size, total);
+            empty.setRecords(new ArrayList<>());
+            return empty;
+        }
+        List<Moment> moments = momentMapper.selectBatchIds(slice);
+        // 按 ids 的顺序排列（selectBatchIds 不保证顺序）
+        Map<Long, Moment> map = moments.stream()
+                .filter(m -> Integer.valueOf(1).equals(m.getStatus()))
+                .collect(Collectors.toMap(Moment::getId, m -> m, (a, b) -> a));
+        List<Moment> ordered = new ArrayList<>();
+        for (Long id : slice) {
+            Moment m = map.get(id);
+            if (m != null) ordered.add(m);
+        }
+        return assembleVOs(ordered, page, size, total, null, null);
+    }
+
+    /**
      * 把动态记录装配为 VO 分页结果（列表 / 搜索共用）。
      * 批量查用户与图片避免 N+1；计数映射非空时用 Redis 真实值覆盖（热度榜）。
      */

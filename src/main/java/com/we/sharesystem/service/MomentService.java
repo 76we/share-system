@@ -12,6 +12,10 @@ public interface MomentService {
     void publish(MomentDTO dto, Long userId, List<MultipartFile> imageUrl);
     /** 动态列表 / 搜索：keyword 非空时按标题/正文/地点匹配 */
     Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword);
+    /** 某用户发布的动态（个人中心，不走缓存） */
+    Page<MomentVO> listByUser(Long userId, Integer page, Integer size);
+    /** 按动态 id 集合查询并保持传入顺序（个人中心点赞/收藏，不走缓存） */
+    Page<MomentVO> listByMomentIds(java.util.List<Long> ids, Integer page, Integer size);
     MomentDetailVO detail(Long id);
     /** 更新动态（仅作者），更新后失效缓存 */
     void update(Long id, MomentDTO dto, Long userId);
