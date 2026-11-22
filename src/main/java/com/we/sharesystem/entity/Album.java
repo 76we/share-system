@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 public class Album {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 相册主人 */
+    private Long userId;
     private String title;
     private String description;
     private String cover;

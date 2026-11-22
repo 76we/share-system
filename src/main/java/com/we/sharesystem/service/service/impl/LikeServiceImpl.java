@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.we.sharesystem.entity.UserLike;
 import com.we.sharesystem.mapper.UserLikeMapper;
 import com.we.sharesystem.service.LikeService;
+import com.we.sharesystem.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -23,6 +24,7 @@ public class LikeServiceImpl implements LikeService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final UserLikeMapper likeMapper;
     private final ThreadPoolTaskExecutor asyncExecutor;
+    private final NotificationService notificationService;
 
     // Lua脚本：原子执行点赞/取消，防止并发超赞
     private static final String LIKE_LUA_SCRIPT = """
@@ -58,6 +60,8 @@ public class LikeServiceImpl implements LikeService {
                 like.setTargetType(targetType);
                 try {
                     likeMapper.insert(like);
+                    // 点赞成功才记通知（异步线程内，不阻塞接口）
+                    notificationService.onLike(userId, targetId, targetType);
                 } catch (DuplicateKeyException e) {
                     // 唯一索引冲突，代表已经存在，幂等，直接忽略
                 }
