@@ -1,7 +1,10 @@
 package com.we.sharesystem.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.we.sharesystem.vo.PhotoMonthGroupVO;
 import com.we.sharesystem.vo.WallPhotoVO;
+
+import java.util.List;
 
 /** 照片墙服务：把用户发布动态时带的图片聚合成"我的视觉日记" */
 public interface PhotoWallService {
@@ -14,6 +17,15 @@ public interface PhotoWallService {
 
     /** 访问 TA 的照片墙；本人访问不受可见性限制，他人访问需对方设为公开 */
     Page<WallPhotoVO> otherPhotos(Long ownerId, Long viewerId, Integer page, Integer size);
+
+    /** 我的照片墙——按月分区间（不分页，供月份导航视图） */
+    List<PhotoMonthGroupVO> myPhotosGrouped(Long userId);
+
+    /** 那年今日——按月分区间 */
+    List<PhotoMonthGroupVO> anniversaryPhotosGrouped(Long userId);
+
+    /** 访问 TA 的照片墙——按月分区间（含可见性校验） */
+    List<PhotoMonthGroupVO> otherPhotosGrouped(Long ownerId, Long viewerId);
 
     /** 读取我的照片墙可见性：0=私密 1=公开 */
     Integer getVisibility(Long userId);

@@ -3,7 +3,10 @@ package com.we.sharesystem.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.Result;
 import com.we.sharesystem.service.PhotoWallService;
+import com.we.sharesystem.vo.PhotoMonthGroupVO;
 import com.we.sharesystem.vo.WallPhotoVO;
+
+import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,6 +43,28 @@ public class PhotoWallController {
                                                   @RequestParam(defaultValue = "12") Integer size) {
         Long userId = (Long) request.getAttribute("userId");
         return Result.ok(photoWallService.anniversaryPhotos(userId, page, size));
+    }
+
+    /** GET /profile/photos/groups —— 我的照片墙，按月分区间（月份导航视图） */
+    @GetMapping("/groups")
+    public Result<List<PhotoMonthGroupVO>> myPhotosGrouped(HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.myPhotosGrouped(userId));
+    }
+
+    /** GET /profile/photos/anniversary/groups —— 那年今日，按月分区间 */
+    @GetMapping("/anniversary/groups")
+    public Result<List<PhotoMonthGroupVO>> anniversaryGrouped(HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.anniversaryPhotosGrouped(userId));
+    }
+
+    /** GET /profile/photos/user/{userId}/groups —— 访问 TA 的照片墙，按月分区间 */
+    @GetMapping("/user/{userId}/groups")
+    public Result<List<PhotoMonthGroupVO>> otherPhotosGrouped(HttpServletRequest request,
+                                                              @PathVariable Long userId) {
+        Long viewerId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.otherPhotosGrouped(userId, viewerId));
     }
 
     /** GET /profile/photos/visibility —— 读取我的照片墙可见性（0私密 1公开） */

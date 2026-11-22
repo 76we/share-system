@@ -11,6 +11,7 @@ import com.we.sharesystem.mapper.MomentMapper;
 import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.LikeService;
 import com.we.sharesystem.service.PhotoWallService;
+import com.we.sharesystem.vo.PhotoMonthGroupVO;
 import com.we.sharesystem.vo.WallPhotoVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -94,6 +95,132 @@ public class PhotoWallServiceImpl implements PhotoWallService {
             throw new BusinessException("用户不存在");
         }
         return user.getWallVisibility() == null ? 0 : user.getWallVisibility();
+    }
+
+    // ==================== 按月分区间视图 ====================
+
+    @Override
+    public List<PhotoMonthGroupVO> myPhotosGrouped(Long userId) {
+        List<Moment> moments = myMoments(userId);
+        return groupByMonth(assembleAll(moments, userId, false));
+    }
+
+    @Override
+    public List<PhotoMonthGroupVO> anniversaryPhotosGrouped(Long userId) {
+        List<Moment> moments = anniversaryMoments(userId);
+        return groupByMonth(assembleAll(moments, userId, true));
+    }
+
+    @Override
+    public List<PhotoMonthGroupVO> otherPhotosGrouped(Long ownerId, Long viewerId) {
+        List<Moment> moments;
+        if (ownerId.equals(viewerId)) {
+            moments = myMoments(ownerId);
+        } else {
+            User owner = userMapper.selectById(ownerId);
+            if (owner == null) {
+                throw new BusinessException("用户不存在");
+            }
+            if (!Integer.valueOf(1).equals(owner.getWallVisibility())) {
+                throw new BusinessException("TA 的照片墙是私密的，暂时无法查看");
+            }
+            moments = myMoments(ownerId);
+        }
+        return groupByMonth(assembleAll(moments, viewerId, false));
+    }
+
+    /** 查某用户全部已发布动态（照片原始来源），按时间倒序 */
+    private List<Moment> myMoments(Long ownerId) {
+        return momentMapper.selectList(
+                new LambdaQueryWrapper<Moment>()
+                        .select(Moment::getId, Moment::getTitle, Moment::getContent, Moment::getCreateTime)
+                        .eq(Moment::getUserId, ownerId)
+                        .eq(Moment::getStatus, 1)
+                        .orderByDesc(Moment::getCreateTime));
+    }
+
+    /** 那年今日的原始动态（往年同一月日） */
+    private List<Moment> anniversaryMoments(Long userId) {
+        LocalDate today = LocalDate.now(ZONE);
+        int currentYear = today.getYear();
+        return momentMapper.selectList(
+                new LambdaQueryWrapper<Moment>()
+                        .select(Moment::getId, Moment::getTitle, Moment::getContent, Moment::getCreateTime)
+                        .eq(Moment::getUserId, userId)
+                        .eq(Moment::getStatus, 1)
+                        .apply("MONTH(create_time) = {0} AND DAY(create_time) = {1}",
+                                today.getMonthValue(), today.getDayOfMonth())
+                        .lt(Moment::getCreateTime, LocalDate.of(currentYear, 1, 1).atStartOfDay())
+                        .orderByDesc(Moment::getCreateTime));
+    }
+
+    /**
+     * 把动态列表装配成完整照片列表（不分页），并填充点赞数与状态。
+     * 与分页版 assemble 共用摊平逻辑，只是不截断。
+     */
+    private List<WallPhotoVO> assembleAll(List<Moment> moments, Long viewerId, boolean withYearsAgo) {
+        if (moments.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> momentIds = moments.stream().map(Moment::getId).toList();
+        List<MomentImage> images = momentImageMapper.selectList(
+                new LambdaQueryWrapper<MomentImage>()
+                        .in(MomentImage::getMomentId, momentIds)
+                        .orderByAsc(MomentImage::getSortOrder)
+                        .orderByAsc(MomentImage::getId));
+        Map<Long, List<MomentImage>> byMoment = images.stream()
+                .collect(Collectors.groupingBy(MomentImage::getMomentId));
+
+        int currentYear = LocalDate.now(ZONE).getYear();
+        List<WallPhotoVO> all = new ArrayList<>();
+        for (Moment m : moments) {
+            List<MomentImage> imgs = byMoment.getOrDefault(m.getId(), Collections.emptyList());
+            for (MomentImage img : imgs) {
+                WallPhotoVO vo = new WallPhotoVO();
+                vo.setId(img.getId());
+                vo.setMomentId(m.getId());
+                vo.setUrl(img.getUrl());
+                vo.setCaption(captionOf(m));
+                vo.setCreateTime(m.getCreateTime());
+                if (withYearsAgo && m.getCreateTime() != null) {
+                    vo.setYearsAgo(currentYear - m.getCreateTime().getYear());
+                }
+                all.add(vo);
+            }
+        }
+        for (WallPhotoVO vo : all) {
+            vo.setLikeCount(likeService.getLikeCount(vo.getId(), PHOTO_LIKE_TYPE).intValue());
+            vo.setLiked(likeService.hasLike(viewerId, vo.getId(), PHOTO_LIKE_TYPE));
+        }
+        return all;
+    }
+
+    /** 按 年-月 把照片切成区间；照片已按时间倒序，分组顺序天然是最近月份在前 */
+    private List<PhotoMonthGroupVO> groupByMonth(List<WallPhotoVO> photos) {
+        Map<String, List<WallPhotoVO>> buckets = new java.util.LinkedHashMap<>();
+        for (WallPhotoVO p : photos) {
+            int year = 0, month = 0;
+            if (p.getCreateTime() != null) {
+                year = p.getCreateTime().getYear();
+                month = p.getCreateTime().getMonthValue();
+            }
+            String key = year + "-" + month;
+            buckets.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
+        }
+        List<PhotoMonthGroupVO> groups = new ArrayList<>();
+        for (Map.Entry<String, List<WallPhotoVO>> e : buckets.entrySet()) {
+            String[] parts = e.getKey().split("-");
+            int year = Integer.parseInt(parts[0]);
+            int month = Integer.parseInt(parts[1]);
+            PhotoMonthGroupVO g = new PhotoMonthGroupVO();
+            g.setYear(year == 0 ? null : year);
+            g.setMonth(month == 0 ? null : month);
+            g.setLabel(year == 0 ? "未知时间" : year + "年" + month + "月");
+            g.setCount(e.getValue().size());
+            g.setPhotos(e.getValue());
+            groups.add(g);
+        }
+        return groups;
     }
 
     @Override
