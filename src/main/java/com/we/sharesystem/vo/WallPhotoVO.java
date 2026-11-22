@@ -23,4 +23,6 @@ public class WallPhotoVO {
     private Integer likeCount;
     /** 当前登录用户是否已点赞 */
     private Boolean liked;
+    /** "那年今日"专用：距今几年（1=去年的今天）。普通照片墙为 null */
+    private Integer yearsAgo;
 }

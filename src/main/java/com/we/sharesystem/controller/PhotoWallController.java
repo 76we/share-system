@@ -30,4 +30,13 @@ public class PhotoWallController {
         Long userId = (Long) request.getAttribute("userId");
         return Result.ok(photoWallService.myPhotos(userId, page, size));
     }
+
+    /** GET /profile/photos/anniversary —— 那年今日：往年同一天发布的照片 */
+    @GetMapping("/anniversary")
+    public Result<Page<WallPhotoVO>> anniversary(HttpServletRequest request,
+                                                  @RequestParam(defaultValue = "1") Integer page,
+                                                  @RequestParam(defaultValue = "12") Integer size) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.anniversaryPhotos(userId, page, size));
+    }
 }

@@ -8,4 +8,7 @@ public interface PhotoWallService {
 
     /** 我的照片墙：当前用户所有已发布动态的图片，按时间倒序分页 */
     Page<WallPhotoVO> myPhotos(Long userId, Integer page, Integer size);
+
+    /** 那年今日：当前用户在往年同一月日发布的照片，按时间倒序分页 */
+    Page<WallPhotoVO> anniversaryPhotos(Long userId, Integer page, Integer size);
 }
