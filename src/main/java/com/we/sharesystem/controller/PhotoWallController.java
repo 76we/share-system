@@ -3,6 +3,7 @@ package com.we.sharesystem.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.Result;
 import com.we.sharesystem.service.PhotoWallService;
+import com.we.sharesystem.vo.FriendWallVO;
 import com.we.sharesystem.vo.PhotoMonthGroupVO;
 import com.we.sharesystem.vo.WallPhotoVO;
 
@@ -89,6 +90,14 @@ public class PhotoWallController {
         Long userId = (Long) request.getAttribute("userId");
         photoWallService.setVisibility(userId, visibility);
         return Result.ok(null);
+    }
+
+    /** GET /profile/photos/friends —— 好友墙聚合：每位好友近期照片（需登录） */
+    @GetMapping("/friends")
+    public Result<List<FriendWallVO>> friendPhotos(HttpServletRequest request,
+                                                   @RequestParam(defaultValue = "6") Integer limit) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.friendPhotos(userId, limit));
     }
 
     /** GET /profile/photos/user/{userId} —— 访问 TA 的照片墙（私密则拒绝，本人不受限） */

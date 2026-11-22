@@ -14,6 +14,8 @@ public interface MomentService {
     Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword);
     /** 某用户发布的动态（个人中心，不走缓存） */
     Page<MomentVO> listByUser(Long userId, Integer page, Integer size);
+    /** 只看朋友：我 + 我好友 发布的动态，按时间倒序，不走缓存 */
+    Page<MomentVO> listByFriends(Long userId, Integer page, Integer size);
     /** 按动态 id 集合查询并保持传入顺序（个人中心点赞/收藏，不走缓存） */
     Page<MomentVO> listByMomentIds(java.util.List<Long> ids, Integer page, Integer size);
     MomentDetailVO detail(Long id);

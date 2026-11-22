@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 部署密钥（不进 git） ###
+deploy/*.env
+deploy/*.env.*
+

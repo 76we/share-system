@@ -13,3 +13,9 @@ mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
+# 上传目录与访问前缀（FileUtil 读取）。
+# 本地默认 D:/uploads/，上线时用环境变量 UPLOAD_DIR 覆盖成 /opt/share/uploads/
+file:
+  upload-dir: ${UPLOAD_DIR:D:/uploads/}
+  url-prefix: /images/
+

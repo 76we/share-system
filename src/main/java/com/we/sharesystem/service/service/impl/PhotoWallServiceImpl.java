@@ -12,6 +12,8 @@ import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.FriendshipService;
 import com.we.sharesystem.service.LikeService;
 import com.we.sharesystem.service.PhotoWallService;
+import com.we.sharesystem.vo.FriendWallVO;
+import com.we.sharesystem.vo.FriendVO;
 import com.we.sharesystem.vo.PhotoMonthGroupVO;
 import com.we.sharesystem.vo.WallPhotoVO;
 import lombok.RequiredArgsConstructor;
@@ -140,6 +142,102 @@ public class PhotoWallServiceImpl implements PhotoWallService {
                         .apply("YEAR(create_time) = {0}", year)
                         .orderByDesc(Moment::getCreateTime));
         return groupByMonth(assembleAll(moments, userId, false));
+    }
+
+    // ==================== 好友墙聚合 ====================
+
+    @Override
+    public List<FriendWallVO> friendPhotos(Long userId, int limitPerFriend) {
+        // 1) 取我所有好友
+        List<FriendVO> friends = friendshipService.myFriends(userId);
+        if (friends.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Long> friendIds = friends.stream().map(FriendVO::getId).toList();
+
+        // 2) 一次批量取好友用户信息（原实现每个好友查一次，好友多时 2N 次查询）
+        Map<Long, User> ownerMap = userMapper.selectBatchIds(friendIds).stream()
+                .collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+
+        // 只保留照片墙可见的好友：0 私密不聚合；1 公开 / 2 仅好友放行（我们已是好友）
+        List<FriendVO> visible = friends.stream()
+                .filter(f -> {
+                    User o = ownerMap.get(f.getId());
+                    if (o == null) return false;
+                    Integer vis = o.getWallVisibility() == null ? 0 : o.getWallVisibility();
+                    return vis != 0;
+                })
+                .toList();
+        if (visible.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 3) 一次批量查这些好友的全部已发布动态（倒序）
+        List<Long> visibleIds = visible.stream().map(FriendVO::getId).toList();
+        List<Moment> moments = momentMapper.selectList(
+                new LambdaQueryWrapper<Moment>()
+                        .select(Moment::getId, Moment::getUserId, Moment::getTitle,
+                                Moment::getContent, Moment::getCreateTime)
+                        .in(Moment::getUserId, visibleIds)
+                        .eq(Moment::getStatus, 1)
+                        .orderByDesc(Moment::getCreateTime));
+        if (moments.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 4) 一次批量查这些动态的图片
+        List<Long> momentIds = moments.stream().map(Moment::getId).toList();
+        List<MomentImage> images = momentImageMapper.selectList(
+                new LambdaQueryWrapper<MomentImage>()
+                        .in(MomentImage::getMomentId, momentIds)
+                        .orderByDesc(MomentImage::getId));
+        if (images.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 5) 内存里按动态分组，再按好友聚合，整个方法固定 4 次 DB 查询
+        Map<Long, Moment> momentMap = moments.stream()
+                .collect(Collectors.toMap(Moment::getId, m -> m, (a, b) -> a));
+        Map<Long, List<MomentImage>> imagesByMoment = images.stream()
+                .collect(Collectors.groupingBy(MomentImage::getMomentId));
+
+        List<FriendWallVO> result = new ArrayList<>();
+        for (FriendVO f : visible) {
+            User owner = ownerMap.get(f.getId());
+            List<WallPhotoVO> photos = new ArrayList<>();
+            int total = 0;
+            for (Moment m : moments) {
+                if (!f.getId().equals(m.getUserId())) continue;
+                List<MomentImage> imgs = imagesByMoment.getOrDefault(m.getId(), Collections.emptyList());
+                total += imgs.size();
+                for (MomentImage img : imgs) {
+                    if (photos.size() >= limitPerFriend) continue;
+                    WallPhotoVO vo = new WallPhotoVO();
+                    vo.setId(img.getId());
+                    vo.setMomentId(img.getMomentId());
+                    vo.setUrl(img.getUrl());
+                    vo.setCaption(captionOf(m));
+                    vo.setCreateTime(m.getCreateTime());
+                    vo.setOwnerId(f.getId());
+                    vo.setOwnerName(f.getNickname() != null ? f.getNickname() : f.getUsername());
+                    vo.setOwnerAvatar(f.getAvatar());
+                    vo.setLikeCount(likeService.getLikeCount(img.getId(), PHOTO_LIKE_TYPE).intValue());
+                    vo.setLiked(likeService.hasLike(userId, img.getId(), PHOTO_LIKE_TYPE));
+                    photos.add(vo);
+                }
+            }
+            if (photos.isEmpty()) continue;
+
+            FriendWallVO fv = new FriendWallVO();
+            fv.setFriendId(f.getId());
+            fv.setFriendName(f.getNickname() != null ? f.getNickname() : f.getUsername());
+            fv.setFriendAvatar(f.getAvatar());
+            fv.setPhotos(photos);
+            fv.setTotalCount(total);
+            result.add(fv);
+        }
+        return result;
     }
 
     /** 查某用户全部已发布动态（照片原始来源），按时间倒序 */

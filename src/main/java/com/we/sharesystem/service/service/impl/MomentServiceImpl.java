@@ -36,6 +36,11 @@ import java.util.stream.Collectors;
 @Service
 public class MomentServiceImpl implements MomentService {
 
+    /** 单页最大条数，与 MybatisPlusConfig 里的 maxLimit 保持一致 */
+    private static final int MAX_PAGE_SIZE = 50;
+    /** 页码上限，防止 (page-1)*size 溢出或用户深翻页打库 */
+    private static final int MAX_PAGE = 1000;
+
     @Autowired
     private MomentMapper momentMapper;
     @Autowired
@@ -52,6 +57,8 @@ public class MomentServiceImpl implements MomentService {
     private RedisTemplate<String, Object> redisTemplate;
     @Autowired
     private MomentCacheService cacheService;
+    @Autowired
+    private com.we.sharesystem.service.FriendshipService friendshipService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -96,6 +103,10 @@ public class MomentServiceImpl implements MomentService {
 
     @Override
     public Page<MomentVO> list(Integer page, Integer size, Long topicId, String sort, String keyword) {
+        // 分页归一化：size 传 10000 会让缓存 key 无限膨胀，也让热度榜的全量内存排序白跑
+        page = (page == null || page < 1) ? 1 : Math.min(page, MAX_PAGE);
+        size = (size == null || size < 1) ? 10 : Math.min(size, MAX_PAGE_SIZE);
+
         // 缓存命中直接返回（第一次查 MySQL 回填，第二次走 Redis）
         String cacheKey = cacheService.listKey(page, size, topicId, sort, keyword);
         MomentCacheService.CachedList cached = cacheService.getList(cacheKey);
@@ -172,6 +183,27 @@ public class MomentServiceImpl implements MomentService {
     public Page<MomentVO> listByUser(Long userId, Integer page, Integer size) {
         LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
         qw.eq(Moment::getStatus, 1).eq(Moment::getUserId, userId)
+          .orderByDesc(Moment::getCreateTime);
+        Page<Moment> p = momentMapper.selectPage(new Page<>(page, size), qw);
+        return assembleVOs(p.getRecords(), page, size, p.getTotal(), null, null);
+    }
+
+    /**
+     * 只看朋友：返回"我 + 我好友"发布的动态（按时间倒序）。不走缓存。
+     * 好友列表为空时也包含我自己的动态（feed 永不空白，且与"只看自己"语义一致）。
+     */
+    @Override
+    public Page<MomentVO> listByFriends(Long userId, Integer page, Integer size) {
+        List<Long> friendIds = friendshipService.myFriends(userId).stream()
+                .map(f -> f.getId()).collect(Collectors.toList());
+        // 把自己也加进来，"只看朋友"= 朋友 + 我
+        List<Long> authorIds = new java.util.ArrayList<>(friendIds);
+        authorIds.add(userId);
+        authorIds = authorIds.stream().distinct().collect(Collectors.toList());
+
+        LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
+        qw.eq(Moment::getStatus, 1)
+          .in(Moment::getUserId, authorIds)
           .orderByDesc(Moment::getCreateTime);
         Page<Moment> p = momentMapper.selectPage(new Page<>(page, size), qw);
         return assembleVOs(p.getRecords(), page, size, p.getTotal(), null, null);

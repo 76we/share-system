@@ -28,7 +28,20 @@ public class LoginInterceptor implements HandlerInterceptor {
                 && request.getRequestURI().matches(".*/moments/\\d+")) {
             return true;
         }
+        // 话题列表为公开只读接口：GET /topics 放行；
+        // 同路径的 POST /topics（新增话题）仍需登录，不再整段排除
+        if ("GET".equalsIgnoreCase(request.getMethod())
+                && request.getRequestURI().matches(".*/topics(/?|/\\d+)")) {
+            return true;
+        }
         String token = request.getHeader("Authorization");
+        // 兼容两种写法：裸 token（前端现有实现）与标准 "Bearer xxx"（curl / Postman / 第三方调用）
+        if (token != null) {
+            token = token.trim();
+            if (token.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                token = token.substring(7).trim();
+            }
+        }
         if(token==null || token.isBlank()){
             response.setStatus(401);
             return false;

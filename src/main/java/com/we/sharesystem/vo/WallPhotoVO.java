@@ -25,4 +25,10 @@ public class WallPhotoVO {
     private Boolean liked;
     /** "那年今日"专用：距今几年（1=去年的今天）。普通照片墙为 null */
     private Integer yearsAgo;
+    /** 作者 id（好友墙聚合场景填充；个人墙即本人，可空） */
+    private Long ownerId;
+    /** 作者昵称（好友墙聚合场景填充） */
+    private String ownerName;
+    /** 作者头像（好友墙聚合场景填充） */
+    private String ownerAvatar;
 }

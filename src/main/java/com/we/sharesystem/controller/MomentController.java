@@ -8,6 +8,7 @@ import com.we.sharesystem.service.MomentService;
 import com.we.sharesystem.vo.MomentDetailVO;
 import com.we.sharesystem.vo.MomentVO;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,7 +25,7 @@ public class MomentController {
     private FileUtil fileUtil;
 
     @PostMapping(consumes = "multipart/form-data")
-    public Result<Void> publish(@RequestPart("dto") MomentDTO dto,
+    public Result<Void> publish(@RequestPart("dto") @Valid MomentDTO dto,
                                 @RequestPart(value = "images",required = false) List<MultipartFile> images,
                                 HttpServletRequest request){
         Long userId = (Long) request.getAttribute("userId");
@@ -52,6 +53,17 @@ public class MomentController {
     }
 
     /**
+     * 只看朋友：我 + 我好友 发布的动态（按时间倒序）。需登录。
+     */
+    @GetMapping("/friends")
+    public Result<Page<MomentVO>> friends(HttpServletRequest request,
+                                          @RequestParam(defaultValue = "1") Integer page,
+                                          @RequestParam(defaultValue = "10") Integer size){
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(momentService.listByFriends(userId, page, size));
+    }
+
+    /**
      * 动态详情（含作者、图片、评论树）
      */
     @GetMapping("/{id}")
@@ -63,7 +75,7 @@ public class MomentController {
      * 更新动态（仅作者），更新后删除缓存
      */
     @PutMapping("/{id}")
-    public Result<Void> update(@PathVariable Long id, @RequestBody MomentDTO dto,
+    public Result<Void> update(@PathVariable Long id, @RequestBody @Valid MomentDTO dto,
                                HttpServletRequest request){
         Long userId = (Long) request.getAttribute("userId");
         momentService.update(id, dto, userId);

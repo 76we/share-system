@@ -1,18 +1,30 @@
+# 生产环境配置：所有敏感项一律走环境变量，仓库里不留明文。
+# 启动前必须注入：DB_USERNAME、DB_PASSWORD、JWT_SECRET
+# 可选：DB_HOST、DB_PORT、DB_NAME、REDIS_HOST、REDIS_PORT、REDIS_PASSWORD、REDIS_DB、UPLOAD_DIR、SERVER_PORT
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
+  # 生产环境关闭详细错误页，避免泄漏内部信息
+  error:
+    include-message: never
+    include-stacktrace: never
 
 spring:
   datasource:
-    url: jdbc:mysql://线上MySQL地址:3306/sharing?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-    username: 线上数据库账号
-    password: 线上数据库密码
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sharing}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 30000
   data:
     redis:
-      host: 云Redis内网地址
-      port: 6379
-      password: 线上Redis密码
-      database: 0
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      # Redis 没设密码时，请把下面这行整行注释掉
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
       timeout: 3000ms
       lettuce:
         pool:
@@ -21,6 +33,30 @@ spring:
           min-idle: 5
           max-wait: 2000ms
 
+# 上传目录指向服务器挂载/备份目录，不再用 Windows 盘符
+file:
+  upload-dir: ${UPLOAD_DIR:/opt/share/uploads/}
+  url-prefix: /images/
+
 jwt:
-  secret: 【这里换成全新、复杂的密钥！不要和dev一样！】
-  expire: 604800000
+  # 必须注入一个全新随机密钥（≥32 字符），不要与 dev 环境相同
+  secret: ${JWT_SECRET}
+  expire: ${JWT_EXPIRE:604800000}
+
+# 生产走 nginx 同域反代，默认不开放跨域；
+# 若前端单独域名部署，再用 CORS_ORIGINS 指定（逗号分隔，支持 https://*.example.com 这类通配）
+app:
+  cors:
+    allowed-origins: ${CORS_ORIGINS:}
+
+# 生产关闭 SQL 打印，避免日志爆炸与数据泄漏
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+logging:
+  file:
+    name: ${LOG_DIR:/opt/share/logs}/share-system.log
+  level:
+    root: info
+    com.we.sharesystem: info

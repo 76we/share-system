@@ -151,8 +151,14 @@ public class ProfileServiceImpl implements ProfileService {
                         .eq(UserLike::getTargetType, 1)
                         .orderByDesc(UserLike::getCreateTime));
         List<Long> ids = relPage.getRecords().stream().map(UserLike::getTargetId).toList();
-        Page<MomentVO> result = momentService.listByMomentIds(ids, page, size);
+        // relPage 已按 page/size 取出「当前页」的 id 集合，这里传 page=1
+        // 让 listByMomentIds 不再二次切分（否则第 2 页起 from>=to，永远返回空）。
+        // 真实总数由关系表的 total 覆盖回去。
+        Page<MomentVO> result = momentService.listByMomentIds(ids, 1, Math.max(ids.size(), 1));
         result.setTotal(relPage.getTotal());
+        // size 要还原成请求的分页大小：listByMomentIds 会按传入 size 生成 Page，
+        // 若沿用 ids.size() 会让前端拿到 size=1、total=11 算出 11 页
+        result.setSize(size);
         return result;
     }
 
@@ -165,8 +171,10 @@ public class ProfileServiceImpl implements ProfileService {
                         .eq(UserCollect::getUserId, userId)
                         .orderByDesc(UserCollect::getCreateTime));
         List<Long> ids = relPage.getRecords().stream().map(UserCollect::getMomentId).toList();
-        Page<MomentVO> result = momentService.listByMomentIds(ids, page, size);
+        // 同上：分页已在 relPage 完成，此处 page=1 避免二次切分
+        Page<MomentVO> result = momentService.listByMomentIds(ids, 1, Math.max(ids.size(), 1));
         result.setTotal(relPage.getTotal());
+        result.setSize(size);
         return result;
     }
 }

@@ -30,6 +30,9 @@ public interface PhotoWallService {
     /** 年度回忆册：某一年发布的照片，按月分区间 */
     List<PhotoMonthGroupVO> yearPhotosGrouped(Long userId, Integer year);
 
+    /** 好友墙聚合：每位好友近期的照片，按好友分段（含作者信息与点赞状态）。每段最多取 limit 张 */
+    List<com.we.sharesystem.vo.FriendWallVO> friendPhotos(Long userId, int limitPerFriend);
+
     /** 读取我的照片墙可见性：0=私密 1=公开 */
     Integer getVisibility(Long userId);
 
