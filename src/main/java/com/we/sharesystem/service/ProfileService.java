@@ -11,6 +11,12 @@ public interface ProfileService {
     /** 我的资料 + 统计 */
     UserProfileVO getProfile(Long userId);
 
+    /** TA 的资料 + 统计（对外视角，屏蔽邮箱） */
+    UserProfileVO getPublicProfile(Long userId);
+
+    /** TA 发布的动态 */
+    Page<MomentVO> publicMoments(Long userId, Integer page, Integer size);
+
     /** 编辑资料 */
     void updateProfile(Long userId, ProfileUpdateDTO dto);
 

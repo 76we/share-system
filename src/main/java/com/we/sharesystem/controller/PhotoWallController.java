@@ -67,6 +67,14 @@ public class PhotoWallController {
         return Result.ok(photoWallService.otherPhotosGrouped(userId, viewerId));
     }
 
+    /** GET /profile/photos/year/{year}/groups —— 年度回忆册：某年照片按月分区间 */
+    @GetMapping("/year/{year}/groups")
+    public Result<List<PhotoMonthGroupVO>> yearGrouped(HttpServletRequest request,
+                                                       @PathVariable Integer year) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.yearPhotosGrouped(userId, year));
+    }
+
     /** GET /profile/photos/visibility —— 读取我的照片墙可见性（0私密 1公开） */
     @GetMapping("/visibility")
     public Result<Integer> getVisibility(HttpServletRequest request) {

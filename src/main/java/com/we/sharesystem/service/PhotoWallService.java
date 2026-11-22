@@ -27,6 +27,9 @@ public interface PhotoWallService {
     /** 访问 TA 的照片墙——按月分区间（含可见性校验） */
     List<PhotoMonthGroupVO> otherPhotosGrouped(Long ownerId, Long viewerId);
 
+    /** 年度回忆册：某一年发布的照片，按月分区间 */
+    List<PhotoMonthGroupVO> yearPhotosGrouped(Long userId, Integer year);
+
     /** 读取我的照片墙可见性：0=私密 1=公开 */
     Integer getVisibility(Long userId);
 

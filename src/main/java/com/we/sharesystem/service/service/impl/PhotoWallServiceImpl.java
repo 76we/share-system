@@ -129,6 +129,21 @@ public class PhotoWallServiceImpl implements PhotoWallService {
         return groupByMonth(assembleAll(moments, viewerId, false));
     }
 
+    @Override
+    public List<PhotoMonthGroupVO> yearPhotosGrouped(Long userId, Integer year) {
+        if (year == null || year < 2000 || year > LocalDate.now(ZONE).getYear()) {
+            throw new BusinessException("年份不合法");
+        }
+        List<Moment> moments = momentMapper.selectList(
+                new LambdaQueryWrapper<Moment>()
+                        .select(Moment::getId, Moment::getTitle, Moment::getContent, Moment::getCreateTime)
+                        .eq(Moment::getUserId, userId)
+                        .eq(Moment::getStatus, 1)
+                        .apply("YEAR(create_time) = {0}", year)
+                        .orderByDesc(Moment::getCreateTime));
+        return groupByMonth(assembleAll(moments, userId, false));
+    }
+
     /** 查某用户全部已发布动态（照片原始来源），按时间倒序 */
     private List<Moment> myMoments(Long ownerId) {
         return momentMapper.selectList(

@@ -75,6 +75,19 @@ public class ProfileServiceImpl implements ProfileService {
         return vo;
     }
 
+    @Override
+    public UserProfileVO getPublicProfile(Long userId) {
+        UserProfileVO vo = getProfile(userId);
+        // 对外视角不暴露邮箱
+        vo.setEmail(null);
+        return vo;
+    }
+
+    @Override
+    public Page<MomentVO> publicMoments(Long userId, Integer page, Integer size) {
+        return momentService.listByUser(userId, page, size);
+    }
+
     /** 我发布的所有动态 id（用于统计获赞/被收藏） */
     private List<Long> myMomentIds(Long userId) {
         return momentMapper.selectList(

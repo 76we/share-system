@@ -52,6 +52,20 @@ public class ProfileController {
         return Result.ok(profileService.myMoments(userId, page, size));
     }
 
+    /** GET /profile/user/{userId} —— TA 的资料 + 统计（屏蔽邮箱） */
+    @GetMapping("/user/{userId}")
+    public Result<UserProfileVO> publicProfile(@PathVariable Long userId) {
+        return Result.ok(profileService.getPublicProfile(userId));
+    }
+
+    /** GET /profile/user/{userId}/moments —— TA 发布的动态 */
+    @GetMapping("/user/{userId}/moments")
+    public Result<Page<MomentVO>> publicMoments(@PathVariable Long userId,
+                                                @RequestParam(defaultValue = "1") Integer page,
+                                                @RequestParam(defaultValue = "10") Integer size) {
+        return Result.ok(profileService.publicMoments(userId, page, size));
+    }
+
     /** GET /profile/likes —— 我点赞的动态 */
     @GetMapping("/likes")
     public Result<Page<MomentVO>> myLikes(HttpServletRequest request,
