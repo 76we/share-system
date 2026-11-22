@@ -12,6 +12,8 @@ public class MomentVO {
     private String content;
     private String location;
     private String mood;
+    /** 作者 id，用于从动态进入 TA 的照片墙 */
+    private Long userId;
     private String nickname;
     private String avatar;
     private List<String> images;

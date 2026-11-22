@@ -7,6 +7,8 @@ import com.we.sharesystem.vo.WallPhotoVO;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -38,5 +40,31 @@ public class PhotoWallController {
                                                   @RequestParam(defaultValue = "12") Integer size) {
         Long userId = (Long) request.getAttribute("userId");
         return Result.ok(photoWallService.anniversaryPhotos(userId, page, size));
+    }
+
+    /** GET /profile/photos/visibility —— 读取我的照片墙可见性（0私密 1公开） */
+    @GetMapping("/visibility")
+    public Result<Integer> getVisibility(HttpServletRequest request) {
+        Long userId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.getVisibility(userId));
+    }
+
+    /** PUT /profile/photos/visibility?visibility=1 —— 设置我的照片墙可见性（0私密 1公开） */
+    @PutMapping("/visibility")
+    public Result<Void> setVisibility(HttpServletRequest request,
+                                      @RequestParam Integer visibility) {
+        Long userId = (Long) request.getAttribute("userId");
+        photoWallService.setVisibility(userId, visibility);
+        return Result.ok(null);
+    }
+
+    /** GET /profile/photos/user/{userId} —— 访问 TA 的照片墙（私密则拒绝，本人不受限） */
+    @GetMapping("/user/{userId}")
+    public Result<Page<WallPhotoVO>> otherPhotos(HttpServletRequest request,
+                                                 @PathVariable Long userId,
+                                                 @RequestParam(defaultValue = "1") Integer page,
+                                                 @RequestParam(defaultValue = "12") Integer size) {
+        Long viewerId = (Long) request.getAttribute("userId");
+        return Result.ok(photoWallService.otherPhotos(userId, viewerId, page, size));
     }
 }

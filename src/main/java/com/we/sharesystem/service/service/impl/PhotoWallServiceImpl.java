@@ -2,15 +2,19 @@ package com.we.sharesystem.service.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.we.sharesystem.common.BusinessException;
 import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentImage;
+import com.we.sharesystem.entity.User;
 import com.we.sharesystem.mapper.MomentImageMapper;
 import com.we.sharesystem.mapper.MomentMapper;
+import com.we.sharesystem.mapper.UserMapper;
 import com.we.sharesystem.service.LikeService;
 import com.we.sharesystem.service.PhotoWallService;
 import com.we.sharesystem.vo.WallPhotoVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -25,6 +29,7 @@ import java.util.stream.Collectors;
  * 归属：照片来自用户自己发布的动态（moment.userId），不需要给图片表加 owner_id。
  * 来源：发布动态时写入 moment_image 的图片，自动成为照片墙内容，无需用户单独上传。
  * 互动：点赞复用 LikeService，targetType=3 表示"照片"，与动态(1)/评论(2)共用一套Redis+MySQL逻辑。
+ * 权限：整面墙一个可见性（user.wall_visibility），0私密仅自己看，1公开他人可访问。
  */
 @Service
 @RequiredArgsConstructor
@@ -37,18 +42,12 @@ public class PhotoWallServiceImpl implements PhotoWallService {
 
     private final MomentMapper momentMapper;
     private final MomentImageMapper momentImageMapper;
+    private final UserMapper userMapper;
     private final LikeService likeService;
 
     @Override
     public Page<WallPhotoVO> myPhotos(Long userId, Integer page, Integer size) {
-        // 我发布的动态（status=1），按时间倒序。直接查库不走缓存，保证发布后立即出现在墙上
-        List<Moment> moments = momentMapper.selectList(
-                new LambdaQueryWrapper<Moment>()
-                        .select(Moment::getId, Moment::getTitle, Moment::getContent, Moment::getCreateTime)
-                        .eq(Moment::getUserId, userId)
-                        .eq(Moment::getStatus, 1)
-                        .orderByDesc(Moment::getCreateTime));
-        return assemble(moments, userId, page, size, false);
+        return photosByOwner(userId, userId, page, size);
     }
 
     @Override
@@ -66,15 +65,70 @@ public class PhotoWallServiceImpl implements PhotoWallService {
                         .lt(Moment::getCreateTime,
                                 LocalDate.of(currentYear, 1, 1).atStartOfDay())
                         .orderByDesc(Moment::getCreateTime));
+        // 那年今日只用于"我的墙"，点赞状态按本人判断
         return assemble(moments, userId, page, size, true);
+    }
+
+    @Override
+    public Page<WallPhotoVO> otherPhotos(Long ownerId, Long viewerId, Integer page, Integer size) {
+        // 自己看自己：不受可见性限制，直接返回
+        if (ownerId.equals(viewerId)) {
+            return photosByOwner(ownerId, viewerId, page, size);
+        }
+        // 他人看：先看墙主是否存在，再看是否公开
+        User owner = userMapper.selectById(ownerId);
+        if (owner == null) {
+            throw new BusinessException("用户不存在");
+        }
+        if (!Integer.valueOf(1).equals(owner.getWallVisibility())) {
+            throw new BusinessException("TA 的照片墙是私密的，暂时无法查看");
+        }
+        // ownerId 决定看谁的照片，viewerId 决定点赞状态（我是否已赞）
+        return photosByOwner(ownerId, viewerId, page, size);
+    }
+
+    @Override
+    public Integer getVisibility(Long userId) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        return user.getWallVisibility() == null ? 0 : user.getWallVisibility();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void setVisibility(Long userId, Integer visibility) {
+        if (visibility == null || (visibility != 0 && visibility != 1)) {
+            throw new BusinessException("可见性只能是 0（私密）或 1（公开）");
+        }
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+        user.setWallVisibility(visibility);
+        userMapper.updateById(user);
+    }
+
+    /** 查某用户的照片并装配分页；ownerId=照片主人，viewerId=当前查看者（用于点赞状态） */
+    private Page<WallPhotoVO> photosByOwner(Long ownerId, Long viewerId, Integer page, Integer size) {
+        // 我发布的动态（status=1），按时间倒序。直接查库不走缓存，保证发布后立即出现在墙上
+        List<Moment> moments = momentMapper.selectList(
+                new LambdaQueryWrapper<Moment>()
+                        .select(Moment::getId, Moment::getTitle, Moment::getContent, Moment::getCreateTime)
+                        .eq(Moment::getUserId, ownerId)
+                        .eq(Moment::getStatus, 1)
+                        .orderByDesc(Moment::getCreateTime));
+        return assemble(moments, viewerId, page, size, false);
     }
 
     /**
      * 把动态列表装配成照片墙分页结果，两个接口共用。
      *
+     * @param viewerId    当前查看者（点赞状态按他判断，不一定是墙主）
      * @param withYearsAgo 是否计算"距今几年"（那年今日接口为 true）
      */
-    private Page<WallPhotoVO> assemble(List<Moment> moments, Long userId,
+    private Page<WallPhotoVO> assemble(List<Moment> moments, Long viewerId,
                                        Integer page, Integer size, boolean withYearsAgo) {
         if (moments.isEmpty()) {
             return new Page<>(page, size, 0);
@@ -118,7 +172,7 @@ public class PhotoWallServiceImpl implements PhotoWallService {
         // 点赞数与点赞状态复用 LikeService（targetType=3），缓存未命中时其内部会回填
         for (WallPhotoVO vo : slice) {
             vo.setLikeCount(likeService.getLikeCount(vo.getId(), PHOTO_LIKE_TYPE).intValue());
-            vo.setLiked(likeService.hasLike(userId, vo.getId(), PHOTO_LIKE_TYPE));
+            vo.setLiked(likeService.hasLike(viewerId, vo.getId(), PHOTO_LIKE_TYPE));
         }
 
         Page<WallPhotoVO> result = new Page<>(page, size, total);

@@ -19,6 +19,8 @@ public class User {
     private String email;
     private String bio;
     private Integer status;
+    /** 照片墙可见性：0=私密（默认，仅自己可见），1=公开 */
+    private Integer wallVisibility;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }
