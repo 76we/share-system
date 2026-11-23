@@ -1,6 +1,7 @@
 package com.we.sharesystem.service.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.we.sharesystem.common.TxHooks;
 import com.we.sharesystem.dto.CommentAddDTO;
 import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentComment;
@@ -66,7 +67,8 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         // 重算并回写动态的评论数（评论为逻辑删除，按 status=1 实际数量统计最稳妥）
         refreshMomentCommentCount(dto.getMomentId());
         // 评论树和评论数都变了：删详情缓存 + 清列表缓存（热度榜按评论数排序）
-        cacheService.evictMoment(dto.getMomentId());
+        // 提交后再失效，避免事务未提交时被并发请求回填旧数据
+        TxHooks.afterCommit(() -> cacheService.evictMoment(dto.getMomentId()));
     }
 
     /**
@@ -151,12 +153,13 @@ public class MomentCommentServiceImpl implements MomentCommentService {
     public void deleteComment(Long commentId, Long loginUserId) {
         MomentComment comment = commentMapper.selectById(commentId);
         if (comment == null || comment.getStatus() == 0) {
-            throw new RuntimeException("评论不存在或已删除");
+            // 用业务异常而不是 RuntimeException：后者会落到兜底分支，用户看到的是 500「系统繁忙」
+            throw new com.we.sharesystem.common.BusinessException("评论不存在或已删除");
         }
 
         // 权限校验：只能删自己的评论
         if (!comment.getUserId().equals(loginUserId)) {
-            throw new RuntimeException("无权限删除该评论");
+            throw new com.we.sharesystem.common.BusinessException("无权限删除该评论");
         }
 
         // 逻辑删除
@@ -164,7 +167,7 @@ public class MomentCommentServiceImpl implements MomentCommentService {
         commentMapper.updateById(comment);
         // 重算并回写动态的评论数
         refreshMomentCommentCount(comment.getMomentId());
-        // 同步失效缓存
-        cacheService.evictMoment(comment.getMomentId());
+        // 同步失效缓存（提交后）
+        TxHooks.afterCommit(() -> cacheService.evictMoment(comment.getMomentId()));
     }
 }

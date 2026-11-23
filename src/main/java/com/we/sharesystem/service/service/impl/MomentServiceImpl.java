@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.BusinessException;
+import com.we.sharesystem.common.PageParam;
+import com.we.sharesystem.common.TxHooks;
 import com.we.sharesystem.dto.MomentDTO;
 import com.we.sharesystem.entity.FileUtil;
 import com.we.sharesystem.entity.Moment;
@@ -43,6 +45,8 @@ public class MomentServiceImpl implements MomentService {
     private static final int MAX_PAGE_SIZE = 50;
     /** 页码上限，防止 (page-1)*size 溢出或用户深翻页打库 */
     private static final int MAX_PAGE = 1000;
+    /** 自定义话题名长度上限，与 topic.name 的 varchar(64) 及 TopicController 的校验对齐 */
+    private static final int MAX_TOPIC_NAME_LENGTH = 30;
 
     @Autowired
     private MomentMapper momentMapper;
@@ -111,8 +115,9 @@ public class MomentServiceImpl implements MomentService {
             throw e;
         }
 
-        // 发布新动态后，所有列表缓存都失效（新内容应出现在最新榜/各筛选页）
-        cacheService.evictAllLists();
+        // 发布新动态后，所有列表缓存都失效（新内容应出现在最新榜/各筛选页）。
+        // 必须等事务提交后再删：否则提交前有并发读把「旧列表」重新写回缓存，脏数据会钉住一整个 TTL。
+        TxHooks.afterCommit(cacheService::evictAllLists);
     }
 
     @Override
@@ -200,6 +205,8 @@ public class MomentServiceImpl implements MomentService {
      */
     @Override
     public Page<MomentVO> listByUser(Long userId, Integer page, Integer size) {
+        page = PageParam.page(page);
+        size = PageParam.size(size, 10);
         LambdaQueryWrapper<Moment> qw = new LambdaQueryWrapper<>();
         qw.eq(Moment::getStatus, 1).eq(Moment::getUserId, userId)
           .orderByDesc(Moment::getCreateTime);
@@ -213,6 +220,8 @@ public class MomentServiceImpl implements MomentService {
      */
     @Override
     public Page<MomentVO> listByFriends(Long userId, Integer page, Integer size) {
+        page = PageParam.page(page);
+        size = PageParam.size(size, 10);
         List<Long> friendIds = friendshipService.myFriends(userId).stream()
                 .map(f -> f.getId()).collect(Collectors.toList());
         // 把自己也加进来，"只看朋友"= 朋友 + 我
@@ -235,6 +244,8 @@ public class MomentServiceImpl implements MomentService {
      */
     @Override
     public Page<MomentVO> listByMomentIds(List<Long> ids, Integer page, Integer size) {
+        page = PageParam.page(page);
+        size = PageParam.size(size, 10);
         if (ids == null || ids.isEmpty()) {
             return new Page<>(page, size, 0);
         }
@@ -452,8 +463,8 @@ public class MomentServiceImpl implements MomentService {
             m.setTopicId(topicId);
         }
         momentMapper.updateById(m);
-        // 更新后删除缓存：详情缓存 + 全部列表缓存
-        cacheService.evictMoment(id);
+        // 更新后删除缓存：详情缓存 + 全部列表缓存（提交后再删，避免并发回填旧数据）
+        TxHooks.afterCommit(() -> cacheService.evictMoment(id));
     }
 
     @Override
@@ -468,8 +479,8 @@ public class MomentServiceImpl implements MomentService {
         }
         m.setStatus(0);
         momentMapper.updateById(m);
-        // 删除后清理缓存
-        cacheService.evictMoment(id);
+        // 删除后清理缓存（提交后再删）
+        TxHooks.afterCommit(() -> cacheService.evictMoment(id));
     }
 
     /**
@@ -483,6 +494,15 @@ public class MomentServiceImpl implements MomentService {
             return dto.getTopicId();
         }
         name = name.trim();
+        // 自定义话题名同样要过长度与敏感词：原先直接落库，
+        // 超过 varchar(64) 会抛 DataIntegrityViolation 变成 500「系统繁忙」，
+        // 也让话题名成了绕过内容校验的后门（首页 tab 会展示它）。
+        if (name.length() > MAX_TOPIC_NAME_LENGTH) {
+            throw new BusinessException("话题名不能超过 " + MAX_TOPIC_NAME_LENGTH + " 个字");
+        }
+        if (sensitiveWordFilter.hit(name)) {
+            throw new BusinessException("话题名包含不合规词汇，请修改后再发布");
+        }
         Topic exist = topicMapper.selectOne(
                 new LambdaQueryWrapper<Topic>().eq(Topic::getName, name).last("limit 1"));
         if (exist != null) {

@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -56,11 +57,18 @@ public class MomentCacheService {
         private long total;
     }
 
-    /** 列表缓存 key：把全部查询条件拼进去，keyword 用 hashCode 避免空格/中文等非法字符 */
+    /**
+     * 列表缓存 key：把全部查询条件拼进去。
+     * 关键词不能直接用 String.hashCode() 当标识 —— 它只有 32 位且碰撞是已知的
+     * （"Aa" 与 "BB" 哈希相同），一旦撞上就会出现「搜 A 返回 B 的结果」。
+     * 这里用 Base64(URL) 编码原文，既无碰撞也不含空格/冒号这类容易看花眼的字符。
+     */
     public String listKey(Integer page, Integer size, Long topicId, String sort, String keyword) {
         String kw = keyword == null ? "" : keyword.trim();
+        String kwPart = kw.isEmpty() ? "0"
+                : Base64.getUrlEncoder().withoutPadding().encodeToString(kw.getBytes(StandardCharsets.UTF_8));
         return LIST_PREFIX + page + ":" + size + ":" + (topicId == null ? 0 : topicId)
-                + ":" + (sort == null ? "new" : sort) + ":" + Integer.toHexString(kw.hashCode());
+                + ":" + (sort == null ? "new" : sort) + ":" + kwPart;
     }
 
     public MomentDetailVO getDetail(Long id) {
@@ -113,16 +121,38 @@ public class MomentCacheService {
         }
     }
 
-    /** 清除全部列表缓存：动态内容/评论数变化会影响任意分页与筛选，用 SCAN 增量删除，避免 KEYS 阻塞 */
+    /**
+     * 清除全部列表缓存。
+     *
+     * 原实现一边遍历 SCAN 游标一边在「同一条连接」上 DEL，
+     * 游标未关闭时复用连接在部分 Lettuce / spring-data-redis 版本上会直接报错，
+     * 或者悄悄漏删一部分 key（缓存就一直脏着）。
+     * 这里改成：游标遍历只负责收集 key，关闭游标后再分批删除。
+     */
     public void evictAllLists() {
-        ScanOptions options = ScanOptions.scanOptions().match(LIST_PREFIX + "*").count(100).build();
+        List<String> keys = new ArrayList<>();
+        ScanOptions options = ScanOptions.scanOptions().match(LIST_PREFIX + "*").count(200).build();
         try (RedisConnection conn = redis.getConnectionFactory().getConnection();
              Cursor<byte[]> cursor = conn.scan(options)) {
             while (cursor.hasNext()) {
-                conn.del(cursor.next());
+                keys.add(new String(cursor.next(), StandardCharsets.UTF_8));
             }
         } catch (Exception e) {
-            log.warn("清理列表缓存失败", e);
+            log.warn("扫描列表缓存失败", e);
+            return;
+        }
+        if (keys.isEmpty()) {
+            return;
+        }
+        // 分批删除，避免一次 DEL 上千个 key 把 Redis 单线程卡住
+        int batch = 200;
+        try {
+            for (int i = 0; i < keys.size(); i += batch) {
+                redis.delete(keys.subList(i, Math.min(i + batch, keys.size())));
+            }
+            log.debug("清理列表缓存 {} 个", keys.size());
+        } catch (Exception e) {
+            log.warn("清理列表缓存失败（残留的 key 会随 TTL 自然过期）", e);
         }
     }
 

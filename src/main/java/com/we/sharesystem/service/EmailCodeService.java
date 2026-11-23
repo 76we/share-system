@@ -32,6 +32,12 @@ public class EmailCodeService {
     private static final Duration RESEND_GAP = Duration.ofSeconds(60);
     /** 同一邮箱每日上限 */
     private static final int DAILY_LIMIT = 10;
+    /**
+     * 单个验证码允许的试错次数。
+     * 6 位数字只有 100 万种组合，5 分钟内不限次数地试，脚本并发几十个请求就能撞开；
+     * 超过次数直接把验证码作废，必须重新获取（重新获取又受 60 秒 + 每日上限约束）。
+     */
+    private static final int MAX_VERIFY_ATTEMPTS = 5;
     /** 场景：注册 */
     public static final String SCENE_REGISTER = "register";
     /** 场景：找回密码 */
@@ -109,10 +115,11 @@ public class EmailCodeService {
             throw new BusinessException("该邮箱今日验证码次数已用完，请明天再试");
         }
 
-        // 3. 生成并落库（覆盖旧码）
+        // 3. 生成并落库（覆盖旧码），同时把试错计数清零
         String code = String.format("%06d", random.nextInt(1_000_000));
         String codeKey = codeKey(scene, to);
         redis.opsForValue().set(codeKey, code, CODE_TTL);
+        redis.delete(tryKey(scene, to));
 
         // 4. 发送
         if (canSend()) {
@@ -138,8 +145,17 @@ public class EmailCodeService {
             throw new BusinessException("验证码已过期，请重新获取");
         }
         if (code == null || !cached.trim().equals(code.trim())) {
+            // 记一次错误：超过上限就作废验证码，逼攻击者重新走「60 秒 + 每日 10 次」那一关
+            String tryKey = tryKey(scene, to);
+            Long fails = increase(tryKey, CODE_TTL);
+            if (fails >= MAX_VERIFY_ATTEMPTS) {
+                redis.delete(key);
+                redis.delete(tryKey);
+                throw new BusinessException("验证码错误次数过多，请重新获取");
+            }
             throw new BusinessException("验证码不正确");
         }
+        redis.delete(tryKey(scene, to));
         if (consume) {
             redis.delete(key);
         }
@@ -147,6 +163,24 @@ public class EmailCodeService {
 
     private String codeKey(String scene, String email) {
         return "mail:code:" + scene + ":" + email;
+    }
+
+    private String tryKey(String scene, String email) {
+        return "mail:try:" + scene + ":" + email;
+    }
+
+    /** 计数器 +1，首次写入时设置过期时间（与验证码同寿命） */
+    private Long increase(String key, Duration ttl) {
+        try {
+            Long value = redis.opsForValue().increment(key);
+            if (value != null && value == 1L) {
+                redis.expire(key, ttl);
+            }
+            return value == null ? 0L : value;
+        } catch (Exception e) {
+            log.warn("写入验证码试错计数失败 key={}: {}", key, e.getMessage());
+            return 0L;
+        }
     }
 
     private String normalize(String email) {

@@ -60,6 +60,9 @@ mysql -ushare -p sharing < schema.sql
 mysql -ushare -p -e "USE sharing; SHOW TABLES;"   # 应看到 11 张表
 ```
 
+> `schema.sql` 现在可重复执行：全部是 `CREATE TABLE IF NOT EXISTS` + `INSERT IGNORE`，不会再 `DROP TABLE`。
+> 早期版本由 mysqldump 导出，每张表前带 `DROP TABLE IF EXISTS`，在已有数据的库上再跑一次就会清库 —— 老脚本不要再用。
+
 ---
 
 ## 3. 上传 jar 与环境变量
@@ -77,6 +80,10 @@ chmod 600 /opt/share/share-system.env
 
 > 关键点：`application-prod.yml` 里所有敏感项都是 `${...}` 占位，靠这个 env 文件注入。
 > `JWT_SECRET` 没设会导致启动失败，这是故意的（失败得早，比带上默认密钥上线好）。
+>
+> `MAIL_USERNAME` / `MAIL_AUTH_CODE` 同样必填：生产启动自检会检查，缺失直接启动失败。
+> 原因很直接 —— 注册与找回密码都靠邮件验证码，配不上就等于「注册功能不可用」；
+> 而「没配就退化成把验证码打到日志」只在本地联调时有用，在生产上等于验证码泄露 + 用户永远注册不了。
 
 ---
 

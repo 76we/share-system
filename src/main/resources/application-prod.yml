@@ -3,12 +3,18 @@
 # 可选：DB_HOST、DB_PORT、DB_NAME、REDIS_HOST、REDIS_PORT、REDIS_PASSWORD、REDIS_DB、UPLOAD_DIR、SERVER_PORT
 server:
   port: ${SERVER_PORT:8080}
+  # 优雅停机：收到 SIGTERM 后先停止接新请求，把在途请求（含正在上传的图片）处理完再退出。
+  # 否则 systemctl restart 会直接掐断连接，用户侧表现为「上传到一半失败」。
+  shutdown: graceful
   # 生产环境关闭详细错误页，避免泄漏内部信息
   error:
     include-message: never
     include-stacktrace: never
 
 spring:
+  lifecycle:
+    # 与 systemd 的 TimeoutStopSec 配合，别让停机动辄等 30 秒以上
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sharing}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: ${DB_USERNAME}

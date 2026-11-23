@@ -82,6 +82,11 @@ public class UserServiceImpl implements UserService {
             loginGuard.fail(username, clientIp);
             throw new BusinessException("用户名或密码错误");
         }
+        // 密码对了还要看账号状态：user.status 0=禁用。
+        // 原先这张字段没人读，等于「封号」只能靠改库 + 改密码，运营上没有手段。
+        if (user.getStatus() != null && user.getStatus() != 1) {
+            throw new BusinessException("该账号已被禁用，如有疑问请联系管理员");
+        }
         loginGuard.success(username, clientIp);
         // token 里带上当前密码版本号：以后改密码时版本 +1，这个 token 自动作废
         return jwtUtils.generateToken(user.getId(),

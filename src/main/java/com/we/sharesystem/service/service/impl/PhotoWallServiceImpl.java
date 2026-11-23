@@ -3,6 +3,7 @@ package com.we.sharesystem.service.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.BusinessException;
+import com.we.sharesystem.common.PageParam;
 import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentImage;
 import com.we.sharesystem.entity.User;
@@ -148,6 +149,8 @@ public class PhotoWallServiceImpl implements PhotoWallService {
 
     @Override
     public List<FriendWallVO> friendPhotos(Long userId, int limitPerFriend) {
+        // 每个好友取几张由前端传，钳制一下：传 1000 会把整个好友圈的图片都拉出来
+        limitPerFriend = PageParam.limit(limitPerFriend, 6, 1, 50);
         // 1) 取我所有好友
         List<FriendVO> friends = friendshipService.myFriends(userId);
         if (friends.isEmpty()) {
@@ -388,6 +391,10 @@ public class PhotoWallServiceImpl implements PhotoWallService {
      */
     private Page<WallPhotoVO> assemble(List<Moment> moments, Long viewerId,
                                        Integer page, Integer size, boolean withYearsAgo) {
+        // 这里是所有分页照片墙的唯一入口，统一归一化：
+        // page=0 / 负数原先会算出负的 from，subList 直接抛越界 → 500
+        page = PageParam.page(page);
+        size = PageParam.size(size, 12);
         if (moments.isEmpty()) {
             return new Page<>(page, size, 0);
         }

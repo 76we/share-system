@@ -1,6 +1,7 @@
 package com.we.sharesystem.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.we.sharesystem.common.IpUtil;
 import com.we.sharesystem.common.Result;
 import com.we.sharesystem.dto.MomentDTO;
 import com.we.sharesystem.entity.FileUtil;
@@ -74,17 +75,15 @@ public class MomentController {
     /**
      * 浏览量去重标识：登录用户按 u{userId}，游客退化到 IP。
      * 同一标识同一天只计一次（service 层用 Redis SET 去重）。
+     * IP 取自 IpUtil（X-Real-IP 优先），不再直接读 X-Forwarded-For —— 那个头第一段客户端可以随便写，
+     * 每换一个假 IP 就能把浏览量再刷一遍。
      */
     private String visitorOf(HttpServletRequest request) {
         Long uid = (Long) request.getAttribute("userId");
         if (uid != null) {
             return "u" + uid;
         }
-        String xff = request.getHeader("X-Forwarded-For");
-        String ip = (xff != null && !xff.isBlank())
-                ? xff.split(",")[0].trim()
-                : request.getRemoteAddr();
-        return "ip" + ip;
+        return "ip" + IpUtil.clientIp(request);
     }
 
     /**

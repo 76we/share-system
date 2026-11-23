@@ -3,6 +3,7 @@ package com.we.sharesystem.service.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.BusinessException;
+import com.we.sharesystem.common.PageParam;
 import com.we.sharesystem.entity.Moment;
 import com.we.sharesystem.entity.MomentImage;
 import com.we.sharesystem.entity.Notification;
@@ -113,6 +114,9 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     public Page<NotificationVO> listMine(Long userId, Integer page, Integer size) {
+        // 归一化：page=0 会算出负 offset 让 SQL 直接报错（用户看到 500「系统繁忙」）
+        page = PageParam.page(page);
+        size = PageParam.size(size, 20);
         Page<Notification> p = notificationMapper.selectPage(
                 new Page<>(page, size),
                 new LambdaQueryWrapper<Notification>()

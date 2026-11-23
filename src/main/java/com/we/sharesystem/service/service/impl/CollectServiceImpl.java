@@ -2,6 +2,8 @@ package com.we.sharesystem.service.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.we.sharesystem.common.BusinessException;
+import com.we.sharesystem.common.RelationCacheWarmer;
 import com.we.sharesystem.entity.UserCollect;
 import com.we.sharesystem.mapper.UserCollectMapper;
 import com.we.sharesystem.service.CollectService;
@@ -13,22 +15,29 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 /**
  * 收藏服务：与点赞同一套模式——Redis Lua 原子切换 + 异步落库 MySQL。
  * 收藏只针对动态(moment)，没有 targetType 维度。
+ *
+ * 冷缓存回填同样走 {@link RelationCacheWarmer}，见 LikeServiceImpl 的说明。
  */
 @Service
 @RequiredArgsConstructor
 public class CollectServiceImpl implements CollectService {
 
+    private static final String REL_PREFIX = "collect:rel:";
+    private static final String COUNT_PREFIX = "collect:count:";
+    private static final String SEED_PREFIX = "collect:seed:";
+
     private final RedisTemplate<String, Object> redisTemplate;
     private final UserCollectMapper collectMapper;
     private final ThreadPoolTaskExecutor asyncExecutor;
+    private final RelationCacheWarmer cacheWarmer;
 
     // Lua：原子执行收藏/取消，防止并发重复收藏
-    private static final String COLLECT_LUA_SCRIPT = """
+    private static final DefaultRedisScript<Long> COLLECT_SCRIPT = new DefaultRedisScript<>("""
             local isMember = redis.call('SISMEMBER', KEYS[1], ARGV[1])
             if isMember == 1 then
                 redis.call('SREM', KEYS[1], ARGV[1])
@@ -39,18 +48,21 @@ public class CollectServiceImpl implements CollectService {
                 redis.call('INCR', KEYS[2])
                 return 1
             end
-            """;
+            """, Long.class);
 
     @Override
     public Integer collect(Long userId, Long momentId) {
         if (momentId == null || momentId <= 0) {
             throw new IllegalArgumentException("收藏目标不合法");
         }
-        String relKey = "collect:rel:" + momentId;
-        String countKey = "collect:count:" + momentId;
+        String relKey = relKey(momentId);
+        String countKey = countKey(momentId);
+        warmUp(momentId, relKey, countKey);
 
-        DefaultRedisScript<Long> redisScript = new DefaultRedisScript<>(COLLECT_LUA_SCRIPT, Long.class);
-        Long res = redisTemplate.execute(redisScript, Arrays.asList(relKey, countKey), userId.toString());
+        Long res = redisTemplate.execute(COLLECT_SCRIPT, Arrays.asList(relKey, countKey), userId.toString());
+        if (res == null) {
+            throw new BusinessException("收藏失败，请稍后重试");
+        }
         int op = res.intValue();
 
         // 异步落库，不阻塞接口
@@ -65,7 +77,7 @@ public class CollectServiceImpl implements CollectService {
      * 表现就是「取消收藏了，刷新后又出现」。改为任务执行时重读 Redis 现状再对齐。
      */
     private void syncToDb(Long userId, Long momentId) {
-        String relKey = "collect:rel:" + momentId;
+        String relKey = relKey(momentId);
         boolean collected = Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(relKey, userId.toString()));
 
         LambdaQueryWrapper<UserCollect> wrapper = Wrappers.lambdaQuery(UserCollect.class)
@@ -92,21 +104,56 @@ public class CollectServiceImpl implements CollectService {
 
     @Override
     public boolean hasCollect(Long userId, Long momentId) {
-        String relKey = "collect:rel:" + momentId;
+        String relKey = relKey(momentId);
+        if (Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(relKey, userId.toString()))) {
+            return true;
+        }
+        warmUp(momentId, relKey, countKey(momentId));
         return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(relKey, userId.toString()));
     }
 
     @Override
     public Long getCollectCount(Long momentId) {
-        String countKey = "collect:count:" + momentId;
+        String countKey = countKey(momentId);
         Object val = redisTemplate.opsForValue().get(countKey);
         if (val == null) {
-            // 缓存未命中 → 查库回填
-            Long dbCount = collectMapper.selectCount(Wrappers.lambdaQuery(UserCollect.class)
-                    .eq(UserCollect::getMomentId, momentId));
-            redisTemplate.opsForValue().set(countKey, dbCount, 30, TimeUnit.MINUTES);
-            return dbCount;
+            // 缓存未命中 → 按数据库回填（计数 + 关系集合），再取
+            warmUp(momentId, relKey(momentId), countKey);
+            val = redisTemplate.opsForValue().get(countKey);
         }
-        return Long.parseLong(val.toString());
+        if (val != null) {
+            try {
+                return Long.parseLong(val.toString());
+            } catch (NumberFormatException ignored) {
+                // 脏值当作缺失，走下面的回源
+            }
+        }
+        return collectMapper.selectCount(Wrappers.lambdaQuery(UserCollect.class)
+                .eq(UserCollect::getMomentId, momentId));
+    }
+
+    private String relKey(Long momentId) {
+        return REL_PREFIX + momentId;
+    }
+
+    private String countKey(Long momentId) {
+        return COUNT_PREFIX + momentId;
+    }
+
+    /** 首次访问该动态（或缓存被清）时，按数据库现状回填计数与收藏关系 */
+    private void warmUp(Long momentId, String relKey, String countKey) {
+        cacheWarmer.ensure(relKey, countKey, SEED_PREFIX + momentId,
+                () -> collectMapper.selectCount(Wrappers.lambdaQuery(UserCollect.class)
+                        .eq(UserCollect::getMomentId, momentId)),
+                () -> collectorIds(momentId));
+    }
+
+    private List<Long> collectorIds(Long momentId) {
+        return collectMapper.selectList(Wrappers.<UserCollect>lambdaQuery()
+                        .select(UserCollect::getUserId)
+                        .eq(UserCollect::getMomentId, momentId))
+                .stream()
+                .map(UserCollect::getUserId)
+                .toList();
     }
 }

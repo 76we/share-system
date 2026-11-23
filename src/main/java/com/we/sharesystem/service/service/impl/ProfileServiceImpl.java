@@ -3,6 +3,8 @@ package com.we.sharesystem.service.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.we.sharesystem.common.BusinessException;
+import com.we.sharesystem.common.PageParam;
+import com.we.sharesystem.common.TxHooks;
 import com.we.sharesystem.dto.PasswordUpdateDTO;
 import com.we.sharesystem.dto.ProfileUpdateDTO;
 import com.we.sharesystem.entity.Moment;
@@ -140,8 +142,10 @@ public class ProfileServiceImpl implements ProfileService {
         }
         user.setPassword(encoder.encode(dto.getNewPassword()));
         userMapper.updateById(user);
-        // 改密码后旧 token 全部失效：盗号者拿到的 token 也跟着作废
-        tokenVersionService.bump(userId);
+        // 改密码后旧 token 全部失效：盗号者拿到的 token 也跟着作废。
+        // 放到提交后执行：版本号 +1 与缓存删除如果发生在提交前，
+        // 并发请求会读到「旧版本号」并缓存 30 分钟，导致旧 token 继续可用。
+        TxHooks.afterCommit(() -> tokenVersionService.bump(userId));
     }
 
     @Override
@@ -151,6 +155,8 @@ public class ProfileServiceImpl implements ProfileService {
 
     @Override
     public Page<MomentVO> myLikedMoments(Long userId, Integer page, Integer size) {
+        page = PageParam.page(page);
+        size = PageParam.size(size, 10);
         // targetType=1（动态）的点赞，按时间倒序
         Page<UserLike> relPage = userLikeMapper.selectPage(
                 new Page<>(page, size),
@@ -173,6 +179,8 @@ public class ProfileServiceImpl implements ProfileService {
 
     @Override
     public Page<MomentVO> myCollectedMoments(Long userId, Integer page, Integer size) {
+        page = PageParam.page(page);
+        size = PageParam.size(size, 10);
         Page<UserCollect> relPage = userCollectMapper.selectPage(
                 new Page<>(page, size),
                 new LambdaQueryWrapper<UserCollect>()

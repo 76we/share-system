@@ -7,8 +7,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -20,6 +22,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 
@@ -33,6 +36,14 @@ public class FileUtil {
 
     private static final long MAX_SIZE = 5L * 1024 * 1024;
     private static final List<String> ALLOWED_EXT = List.of(".jpg", ".jpeg", ".png");
+
+    /**
+     * 像素上限（4000 万）。
+     * 5MB 的体积限制挡不住「解压炸弹」：一张几十 KB 的 PNG 可以声明 2 万 × 2 万，
+     * ImageIO.read 全解码需要几 GB 堆内存，生产 -Xmx512m 会直接把进程撑爆，
+     * 一个请求就能让整个服务不可用。所以解码前先只读文件头拿宽高做体检。
+     */
+    private static final long MAX_PIXELS = 40_000_000L;
 
     /* 图片治理参数：原图长边 1600px / 缩略图长边 720px。
        手机直出 4000px 的原图直接进信息流，一张就几 MB，九宫格首屏会被拖死。
@@ -76,6 +87,8 @@ public class FileUtil {
         if (!isRealImage(file)) {
             throw new BusinessException("文件内容不是有效的图片");
         }
+        // 解码前先看宽高，挡住解压炸弹
+        assertPixelBudget(file);
 
         String uuid = UUID.randomUUID().toString().replace("-", "");
         try {
@@ -214,6 +227,40 @@ public class FileUtil {
             return head[0] == (byte) 0xFF && head[1] == (byte) 0xD8 && head[2] == (byte) 0xFF;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /**
+     * 只读文件头拿宽高做像素级体检，不解码整张图。
+     * 一旦超过 {@link #MAX_PIXELS} 就直接拒绝，避免 ImageIO.read 把堆撑爆。
+     */
+    private void assertPixelBudget(MultipartFile file) {
+        try (InputStream in = file.getInputStream();
+             ImageInputStream iis = ImageIO.createImageInputStream(in)) {
+            if (iis == null) {
+                throw new BusinessException("文件内容不是有效的图片");
+            }
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) {
+                throw new BusinessException("文件内容不是有效的图片");
+            }
+            ImageReader reader = readers.next();
+            try {
+                // seekForwardOnly=true、ignoreMetadata=true：只解析头部，不读像素数据
+                reader.setInput(iis, true, true);
+                long w = reader.getWidth(0);
+                long h = reader.getHeight(0);
+                if (w <= 0 || h <= 0) {
+                    throw new BusinessException("文件内容不是有效的图片");
+                }
+                if (w * h > MAX_PIXELS) {
+                    throw new BusinessException("图片尺寸过大（超过 4000 万像素），请压缩后再上传");
+                }
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException e) {
+            throw new BusinessException("图片读取失败，请换一张试试");
         }
     }
 }
