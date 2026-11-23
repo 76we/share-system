@@ -35,4 +35,6 @@ build/
 ### 部署密钥（不进 git） ###
 deploy/*.env
 deploy/*.env.*
+# 但模板要进 git：它是部署时唯一的环境变量清单，丢了就得凭记忆重建
+!deploy/*.env.example
 
