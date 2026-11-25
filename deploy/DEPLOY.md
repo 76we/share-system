@@ -302,26 +302,78 @@ location /images/ {
 | 层 | 内容 | 频率 | 保留 | 防什么 |
 |---|---|---|---|---|
 | 第一份 | `/data/mysql`、`/data/uploads` | 实时 | - | 这是正在用的数据，不是备份 |
-| 第二份 | `/backup` 同机 | 每天 03:00 | 7 天 | 误删、手滑 |
+| 第二份 | `/data/backup` 同机 | 每天 03:00 | 7 天 | 误删、手滑 |
 | 第三份 | 对象存储异地 | 每天 | 30 天 | 磁盘坏、整机丢失、欠费释放 |
 
 后三种故障只有第三层能救。同机备份防的是手滑，异地备份防的是灭机 —— 只做前者等于没备份。
 
-**顺序必须是先 dump 库、再同步图**：
+命令已经封进 `deploy/backup.sh`，不用自己拼：
 
 ```bash
-mysqldump --single-transaction sharing | gzip > /backup/db-$(date +%F).sql.gz
-rsync -a /data/uploads/ /backup/uploads/
-rclone copy /backup/ oss:share-backup/
+cd /opt/share
+
+./deploy/backup.sh              # 预检：打印要做什么，一个文件都不写
+./deploy/backup.sh --yes        # 真正执行
+./deploy/backup.sh --yes --no-remote   # 跳过异地同步
 ```
 
-反过来的结果是「库里有引用、备份里没文件」，恢复后满站破图；先库后图最多多几个孤儿文件，
-`photo-maintenance.sh orphans` 还能清掉。
+它做四件事：`mysqldump` 导出全库 → 同步图片 → 清理 7 天前的 dump → `rclone` 传异地。
 
-图片用 `rclone copy` 而不是 `sync`：uploads 只增不改，`sync` 一旦源目录出事会连备份一起删。
+几个刻意的设计：
 
-**上线第一周必须做一次真实恢复演练**（解到临时目录、导入数据库、nginx 指过去点开看图），
-没验证过的备份等于没有备份。
+- **默认 dry-run**。备份是唯一「看起来天天在做、出事才发现是坏的」东西，先看清楚再执行。
+- **先库后图**。反过来的结果是「库里有引用、备份里没文件」，恢复后满站破图；
+  先库后图最多多几个孤儿文件，`photo-maintenance.sh orphans` 还能清掉。
+- **图片只增不删**（`rsync` 不带 `--delete`）。源目录被误删时备份里还留着，
+  这正是本地备份存在的意义。代价是已删除的图会一直占空间，可以接受。
+- **先写临时文件再原子改名**。否则某次 dump 失败会把当天早先成功的那份一起覆盖掉。
+- **失败会 exit 1 并可选告警**。静默失败的备份最危险 —— 你以为有，其实早就断了。
+
+环境变量（写在 cron 里，或 source 一份）：
+
+```bash
+BACKUP_DIR=/data/backup
+BACKUP_RETENTION_DAYS=7
+RCLONE_REMOTE=cos:share-backup        # 留空则只做本地备份（会告警提醒）
+ALERT_WEBHOOK=https://example.com/hook # 失败时 POST {"text":"..."}，钉钉/飞书可直接用
+```
+
+cron（`/etc/cron.d/share-backup`）：
+
+```bash
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 3 * * * root set -a; . /opt/share/deploy/share-system.env; set +a; \
+          BACKUP_DIR=/data/backup RCLONE_REMOTE=cos:share-backup \
+          /opt/share/deploy/backup.sh --yes >> /var/log/share-backup.log 2>&1
+```
+
+`set -a` 让 source 进来的变量自动 export，脚本里调起的 `mysqldump`/`rclone` 子进程也能读到。
+
+`rclone` 配置一次（`rclone config`），远端名字就是 `RCLONE_REMOTE` 里 `:` 前面那段。
+异地用 `rclone sync` 是安全的，因为本地备份目录本身「只增不删」，不会把源端的误删同步出去。
+
+### 恢复演练：上线第一周必须做一次
+
+没验证过的备份等于没有备份。「每天跑 mysqldump」和「真能恢复出来」之间隔着字符集、
+表顺序、压缩包是否完整好几件事，等真丢数据那天才发现备份是坏的，就晚了。
+
+```bash
+./deploy/restore.sh list          # 看有哪些备份
+./deploy/restore.sh db            # 恢复最新一份到 sharing_restore（临时库）
+./deploy/restore.sh files         # 恢复图片到 /tmp/restore-uploads
+```
+
+两个命令**默认都恢复到临时位置**，要覆盖生产必须加 `--force` 并手输库名二次确认。
+
+恢复后做三项检查（脚本会打印命令，照抄即可）：
+
+1. 动态正文是中文不是乱码
+2. `DB_NAME=sharing_restore UPLOAD_DIR=/tmp/restore-uploads ./deploy/photo-maintenance.sh missing`
+   **输出为空** —— 说明「库里有引用的图，备份里都有」，恢复后不会破图。这一条是演练的核心。
+3. 随机点开几张图，能显示、不是 0 字节
+
+演练完记得 `DROP DATABASE sharing_restore;` 和删掉临时目录。
 
 ### 回收与巡检
 
