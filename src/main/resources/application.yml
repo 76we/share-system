@@ -49,7 +49,10 @@ mybatis-plus:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
 # 上传目录与访问前缀（FileUtil 读取）。
-# 本地默认 D:/uploads/，上线时用环境变量 UPLOAD_DIR 覆盖成 /opt/share/uploads/
+# 本地默认 D:/uploads/（Windows 绝对路径）；线上用 UPLOAD_DIR=/data/uploads 覆盖。
+# 注意：务必是绝对路径 —— 在 Linux 上写盘符会被当成相对路径，
+# 图片写进工作目录下的「D:」文件夹，nginx 找不到文件，全站破图且不报错。
+# StartupCheck 会在启动时拦下这种情况。
 file:
   upload-dir: ${UPLOAD_DIR:D:/uploads/}
   url-prefix: /images/
