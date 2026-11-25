@@ -35,7 +35,7 @@ services:
       # 少了这一条，CURRENT_TIMESTAMP 写进库的时间比实际早 8 小时，
       # 表现是「刚发的动态显示 8 小时前」，且只有线上有、本地正常。
       - --default-time-zone=+08:00
-      - --innodb-buffer-pool-size=512M
+      - --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-512M}
       - --max-connections=200
     volumes:
       # bind mount 到宿主机绝对路径，容器删了重建数据还在原地。
@@ -62,7 +62,9 @@ services:
       # 首次启动要初始化数据目录，可能要 30-60 秒，给足冷启动时间
       start_period: 60s
     networks: [share-net]
-    mem_limit: 1200m
+    # 内存上限可覆盖：2G 小机器用 MYSQL_MEM=704m，配合 MYSQL_BUFFER_POOL=192M。
+    # 默认值是按 4G 机器定的，不改就是现在这个行为。
+    mem_limit: ${MYSQL_MEM:-1200m}
     logging: *default-logging
 
   redis:
@@ -74,7 +76,7 @@ services:
       - --appendonly
       - "yes"
       - --maxmemory
-      - 256mb
+      - ${REDIS_MAXMEMORY:-256mb}
       # 缓存装满后淘汰最久未用的 key，而不是拒绝写入。
       # 默认的 noeviction 会在内存满时让所有写入报错，表现是「点赞突然全失败」。
       - --maxmemory-policy
@@ -87,7 +89,7 @@ services:
       timeout: 3s
       retries: 6
     networks: [share-net]
-    mem_limit: 320m
+    mem_limit: ${REDIS_MEM:-320m}
     logging: *default-logging
 
   backend:
@@ -132,7 +134,7 @@ services:
       # 只监听回环：公网打不开 8080，只能由宿主机 nginx 反代进来。
       # 写成 "8080:8080" 等于把后端直接暴露在公网，
       # 那时攻击面就不只是 JWT 了（还有未鉴权接口、actuator 等）。
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 20s
@@ -141,7 +143,7 @@ services:
       # 启动 + Flyway 迁移 + MyBatis 初始化，给 60 秒
       start_period: 60s
     networks: [share-net]
-    mem_limit: 1024m
+    mem_limit: ${BACKEND_MEM:-1024m}
     logging: *default-logging
 
 networks:
