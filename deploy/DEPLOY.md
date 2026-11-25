@@ -95,6 +95,19 @@ chmod 600 deploy/share-system.env
 vi deploy/share-system.env
 ```
 
+### 这里有两份 env，作用完全不同
+
+| 文件 | 谁读它 | 管什么 |
+|---|---|---|
+| `deploy/share-system.env` | **容器内的应用** | 数据库密码、JWT 密钥、上传目录、邮件账号 |
+| 仓库根 `.env` | **docker compose 自己** | 数据盘路径、宿主机端口、各容器内存上限 |
+
+根 `.env` 不存在也能跑（全走 compose 里的默认值）。只有两种情况需要
+`cp .env.example .env`：机器内存只有 2G，或者处在备案期要把端口让给 nginx。
+
+> 为什么必须分开：compose 的 `${VAR:-默认}` 插值**只读 `.env` 和 shell 环境**，
+> 读不到 `env_file` 里定义的变量。把两者混在一起，表现是「变量明明写了却没生效」。
+
 必填的五项，其余保持默认即可：
 
 | 变量 | 说明 |
@@ -104,7 +117,7 @@ vi deploy/share-system.env
 | `DB_PASSWORD` | **必须和 `MYSQL_PASSWORD` 一模一样** |
 | `JWT_SECRET` | `openssl rand -base64 48` 生成，≥32 字符 |
 | `MAIL_USERNAME` / `MAIL_AUTH_CODE` | QQ 邮箱 + SMTP 授权码（不是登录密码） |
-| `SHARE_BASE_URL` | `https://你的域名`，分享卡片要用绝对地址 |
+| `SHARE_BASE_URL` | `https://你的域名`，分享卡片要用绝对地址；备案期填 `http://你的IP:8080` |
 
 > **两个容易踩的格式问题**：
 > 1. 值不要加引号。`env_file` 不是 shell，某些 compose 版本会把引号当成值的一部分，
@@ -150,7 +163,7 @@ docker compose exec mysql sh -c \
 docker compose exec mysql sh -c \
   'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "use sharing; select version,type,success from flyway_schema_history;"'
 
-# 接口
+# 接口（端口以根 .env 的 BACKEND_PORT 为准：默认 8080，备案期为 8081）
 curl -i http://127.0.0.1:8080/topics      # 公开接口，200 + JSON
 curl -i http://127.0.0.1:8080/profile     # 需要登录，401
 curl -s http://127.0.0.1:8080/actuator/health   # {"status":"UP"}
@@ -209,6 +222,49 @@ rsync -av --delete dist/ root@your.server:/opt/share/frontend/dist/
 ---
 
 ## 6. nginx
+
+先分清自己在哪个阶段：**备案没下来用 6.0，备案通过后用 6.1**。两份配置别混用。
+
+### 6.0 只有 IP（ICP 备案还在审核）
+
+内地服务器在备案通过之前，把域名解析过去会被拦在 80/443（返回「未备案提示页」）。
+这段时间只能走非标端口，访问地址是 `http://你的IP:8080`。
+
+两处要一起改，少一处就起不来：
+
+```bash
+# ① 后端让出 8080，退到 8081
+cd /opt/share
+echo "BACKEND_PORT=8081" >> .env
+docker compose up -d backend          # 只重建 backend，数据库不动
+
+# ② nginx 监听 8080，反代到 8081
+cp deploy/nginx-share-system-ip.conf /etc/nginx/conf.d/share-system.conf
+nginx -t && systemctl reload nginx
+```
+
+> 防火墙要放行 **8080**，80/443 可以暂时不开。
+> 8080 是纯 HTTP，密码和 JWT 明文传输 —— 这个阶段只自己验收和给熟人看，
+> 别对外公布，也别用你常用的密码注册。
+
+**备案通过后切回来**（约 3 分钟，数据不动）：
+
+```bash
+# ① 域名解析：DNSPod 加 A 记录，@ 和 www 都指向服务器 IP，等待生效
+# ② 后端回到 8080
+cd /opt/share && sed -i 's/^BACKEND_PORT=8081/BACKEND_PORT=8080/' .env
+docker compose up -d backend
+# ③ 换成正式配置，填域名
+cp deploy/nginx-share-system.conf /etc/nginx/conf.d/share-system.conf
+vi /etc/nginx/conf.d/share-system.conf      # server_name 和 valid_referers 都改成你的域名
+nginx -t && systemctl reload nginx
+certbot --nginx -d 你的域名 -d www.你的域名  # 上 HTTPS
+rm deploy/nginx-share-system-ip.conf        # 临时文件删掉，避免以后误用
+```
+
+别忘了在页面底部挂备案号并链到 `https://beian.miit.gov.cn`，这是管局复查项。
+
+### 6.1 有域名
 
 ```bash
 cp /opt/share/deploy/nginx-share-system.conf /etc/nginx/conf.d/share-system.conf
