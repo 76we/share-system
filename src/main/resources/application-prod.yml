@@ -39,9 +39,9 @@ spring:
           min-idle: 5
           max-wait: 2000ms
 
-# 上传目录指向服务器挂载/备份目录，不再用 Windows 盘符
+# 上传目录指向独立数据盘，不用 Windows 盘符也不用系统盘
 file:
-  upload-dir: ${UPLOAD_DIR:/opt/share/uploads/}
+  upload-dir: ${UPLOAD_DIR:/data/uploads}
   url-prefix: /images/
 
 jwt:

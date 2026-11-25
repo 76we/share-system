@@ -13,10 +13,11 @@
 #   ./photo-maintenance.sh orphans --delete      # 真正删除（默认只删 30 天前的）
 #   ./photo-maintenance.sh missing               # 列出库里有、盘上没有的破图
 #
-# 环境变量（一般写在 /opt/share/share-system.env 里，再 source 进来）：
-#   UPLOAD_DIR   默认 /opt/share/uploads
+# 环境变量（一般先 source /opt/share/deploy/share-system.env 再跑）：
+#   UPLOAD_DIR   默认 /data/uploads（容器部署下这就是宿主机的图片目录）
 #   URL_PREFIX   默认 /images/
 #   DB_HOST / DB_NAME / DB_USER / DB_PASS
+#                兼容 env 文件里的 DB_USERNAME / DB_PASSWORD 命名，source 进来即可直接用
 #   ORPHAN_MIN_AGE  孤儿文件最小年龄（天），默认 30
 #
 # 安全约束：
@@ -26,12 +27,14 @@
 # ============================================================================
 set -uo pipefail
 
-UPLOAD_DIR="${UPLOAD_DIR:-/opt/share/uploads}"
+UPLOAD_DIR="${UPLOAD_DIR:-/data/uploads}"
 URL_PREFIX="${URL_PREFIX:-/images/}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_NAME="${DB_NAME:-sharing}"
-DB_USER="${DB_USER:-share}"
-DB_PASS="${DB_PASS:-}"
+# 兼容两种命名：脚本内部用 DB_USER/DB_PASS，env 文件里是 DB_USERNAME/DB_PASSWORD。
+# 这样 cron 里 source 一下 env 文件就能跑，不用把用户名密码再抄一遍。
+DB_USER="${DB_USER:-${DB_USERNAME:-share}}"
+DB_PASS="${DB_PASS:-${DB_PASSWORD:-}}"
 ORPHAN_MIN_AGE="${ORPHAN_MIN_AGE:-30}"
 
 # 去掉结尾多余的 /

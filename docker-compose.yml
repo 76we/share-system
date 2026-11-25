@@ -1,0 +1,149 @@
+# 尘叙阁 · 服务编排（MySQL + Redis + 后端）
+#
+# ── 为什么 nginx 不在这个文件里 ────────────────────────────────────────────
+# nginx 在这套部署里只做两件事：托管前端静态文件、直接读磁盘发图片。
+# 两者都是宿主机上的静态行为，放进容器只多一层网络和一层排查。
+# 而 HTTPS 证书（certbot）在宿主机上申请、续期、配 cron 都最直接。
+# 所以 nginx 留在宿主机，backend 把端口发布到 127.0.0.1:8080 供它反代 ——
+# 现有 deploy/nginx-share-system.conf 一行都不用改。
+#
+# ── 目录约定（改之前先读 DEPLOY.md）────────────────────────────────────────
+#   /opt/share/   可重建：代码、配置、编排、前端 dist（进 git，可随时重来）
+#   /data/        不可重建：数据库、图片、Redis（只进备份，永不随便动）
+# 这条边界是整套部署最重要的约定：任何 rsync --delete、rm -rf 都只作用于 /opt/share。
+
+name: share-system
+
+# 容器日志不设上限会把 /var/lib/docker 撑爆（默认 json-file 无限增长）。
+# 一个进程崩溃重启几十次就能写出几个 GB，而 df 显示的是 Docker 目录在涨，
+# 很难联想到是日志。统一限制到 20M × 5 个。
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: share-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # 容器默认 UTC，而应用按 Asia/Shanghai 读写。
+      # 少了这一条，CURRENT_TIMESTAMP 写进库的时间比实际早 8 小时，
+      # 表现是「刚发的动态显示 8 小时前」，且只有线上有、本地正常。
+      - --default-time-zone=+08:00
+      - --innodb-buffer-pool-size=512M
+      - --max-connections=200
+    volumes:
+      # bind mount 到宿主机绝对路径，容器删了重建数据还在原地。
+      # 不要换成 named volume —— 它藏在 /var/lib/docker/volumes 里路径随机，
+      # 备份脚本找不到，将来迁机器时最难搬的就是它。
+      #
+      # 数据盘不是挂在 /data 时（比如 /mnt/data），用 shell 变量覆盖，不用改文件：
+      #   DATA_DIR=/mnt/data docker compose up -d
+      - ${DATA_DIR:-/data}/mysql:/var/lib/mysql
+    env_file:
+      - deploy/share-system.env
+    ports:
+      # 只发布到回环：公网连不上数据库，但宿主机上的 mysqldump、巡检脚本、
+      # 临时排障都能直接用 mysql 客户端连，不用每次 docker exec。
+      # 备份和巡检是每天都要跑的事，让它们简单一点值得。
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      # 不带密码：mysqladmin ping 在认证失败时也会返回 alive。
+      # 这里只需要「mysqld 已经能接受连接」，不是校验密码。
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # 首次启动要初始化数据目录，可能要 30-60 秒，给足冷启动时间
+      start_period: 60s
+    networks: [share-net]
+    mem_limit: 1200m
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: share-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      # 缓存装满后淘汰最久未用的 key，而不是拒绝写入。
+      # 默认的 noeviction 会在内存满时让所有写入报错，表现是「点赞突然全失败」。
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - ${DATA_DIR:-/data}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [share-net]
+    mem_limit: 320m
+    logging: *default-logging
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 镜像带版本标签，回滚才有办法：
+    #   BACKEND_TAG=1.2.0 docker compose up -d      ← 切到某个历史版本
+    #   docker compose up -d --build                ← 用当前代码重建 latest
+    # 只用 latest 的话，出问题时只能靠 git checkout + 重新 build，
+    # 而那时你往往正在慌，记不清上次好的版本是哪个 commit。
+    image: share-backend:${BACKEND_TAG:-latest}
+    container_name: share-backend
+    restart: unless-stopped
+    depends_on:
+      # 等健康检查通过再启动，而不是「容器起来了」就启动。
+      # 后者的问题：MySQL 容器在初始化数据目录的 40 秒里端口是开的但不接受查询，
+      # 后端这时连上去会直接启动失败并退出。
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 这三项是「结构性」配置，和下面的挂载路径强耦合，所以写在编排里而不是 env 文件里：
+      # 让「改了挂载点却忘了改环境变量」这类错误在 git diff 里一眼可见。
+      SPRING_PROFILES_ACTIVE: prod
+      UPLOAD_DIR: /data/uploads
+      TZ: Asia/Shanghai
+      # 容器之间用服务名互访。写 127.0.0.1 会指向后端容器自己，连不上数据库。
+      DB_HOST: mysql
+      REDIS_HOST: redis
+      # 文件日志写到容器内的 /tmp，不进数据盘。
+      # 容器部署看日志用 docker logs（下面的 logging 限制了大小），
+      # 把 .log 文件落在 /data 里只会让「不可重建的数据目录」混进可丢弃的东西，
+      # 备份时还要专门排除。
+      LOG_DIR: /tmp/logs
+    env_file:
+      - deploy/share-system.env
+    volumes:
+      - ${DATA_DIR:-/data}/uploads:/data/uploads
+    ports:
+      # 只监听回环：公网打不开 8080，只能由宿主机 nginx 反代进来。
+      # 写成 "8080:8080" 等于把后端直接暴露在公网，
+      # 那时攻击面就不只是 JWT 了（还有未鉴权接口、actuator 等）。
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      # 启动 + Flyway 迁移 + MyBatis 初始化，给 60 秒
+      start_period: 60s
+    networks: [share-net]
+    mem_limit: 1024m
+    logging: *default-logging
+
+networks:
+  share-net:
+    driver: bridge

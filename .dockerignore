@@ -1,0 +1,30 @@
+# 构建上下文只需要 target 下的 fat jar。
+# 不排除的话 docker 会把 .git（几十 MB）、.workbuddy、.tmp 截图一起传给守护进程，
+# 每次 build 都要几十秒，而实际用到的只有那一个 jar。
+
+.git
+.gitignore
+.gitattributes
+.workbuddy
+.tmp
+.idea
+*.iml
+*.md
+
+# 源码和构建配置：
+# 镜像是「拿现成 jar 跑」，不在镜像里 mvn build，所以这些都不需要。
+src
+pom.xml
+mvnw
+mvnw.cmd
+.mvn
+
+deploy
+
+# 只放行 jar，排除 classes/、surefire 报告、.jar.original 等
+target/*
+!target/*.jar
+
+Dockerfile
+.dockerignore
+docker-compose.yml
