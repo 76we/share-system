@@ -1,5 +1,9 @@
 package com.we.sharesystem.entity;
 
+import com.drew.imaging.ImageMetadataReader;
+import com.drew.metadata.Metadata;
+import com.drew.metadata.exif.ExifDirectoryBase;
+import com.drew.metadata.exif.ExifIFD0Directory;
 import com.we.sharesystem.common.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -53,8 +57,18 @@ public class FileUtil {
     private static final int THUMB_EDGE = 720;
     /** 尺寸和体积都在阈值内就原样保存，避免无谓的二次编码掉画质 */
     private static final long KEEP_AS_IS_SIZE = 800L * 1024;
+    /** 主图质量。小图也用这个值：实测 0.90 会让「本来就被压过的小图」反而变大 50%（36KB → 54KB） */
     private static final float MAIN_QUALITY = 0.85f;
     private static final float THUMB_QUALITY = 0.78f;
+
+    /**
+     * 上传结果。
+     * width / height 是**转正后**的原始像素尺寸（缩放前），前端用它算宽高比占位：
+     * 先占住正确比例的盒子再加载图片，整页不会因为图片到达而跳动（CLS）。
+     */
+    public record UploadResult(String url, int width, int height) {
+    }
+
 
     @Value("${file.upload-dir}")
     private String uploadDir;
@@ -62,7 +76,7 @@ public class FileUtil {
     @Value("${file.url-prefix:/images/}")
     private String urlPrefix;
 
-    public String upload(MultipartFile file) {
+    public UploadResult upload(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException("文件为空");
         }
@@ -94,12 +108,20 @@ public class FileUtil {
         try {
             Path dir = Paths.get(uploadDir);
             Files.createDirectories(dir);
-            BufferedImage src = ImageIO.read(file.getInputStream());
-            if (src == null) {
+
+            // 顺序不能反：先读方向标记 → 再解码 → 按标记把像素真正转正。
+            // 若先解码后旋转，转的是一张"已经丢了方向信息"的图，方向无从判断。
+            int orientation = readOrientation(file);
+            BufferedImage raw = ImageIO.read(file.getInputStream());
+            if (raw == null) {
                 throw new BusinessException("文件内容不是有效的图片");
             }
+            BufferedImage src = applyOrientation(raw, orientation);
+            // 尺寸必须在转正之后取：转 90° 会交换宽高，用转正前的宽高做宽高比会得到横图
+            int width = src.getWidth();
+            int height = src.getHeight();
 
-            int longest = Math.max(src.getWidth(), src.getHeight());
+            int longest = Math.max(width, height);
             boolean smallEnough = longest <= MAX_EDGE && file.getSize() <= KEEP_AS_IS_SIZE;
             // 大 PNG 若无透明通道就改存 JPEG：无损 PNG 一张 1.6MB，同图 JPEG 只要二三百 KB。
             // 有透明通道才保留 PNG，否则透明区域会变成黑/白块。
@@ -108,17 +130,17 @@ public class FileUtil {
             String filename = uuid + saveExt;
             Path mainPath = dir.resolve(filename);
 
-            if (smallEnough) {
-                // 尺寸和体积都够小：原样落盘，不重新编码
-                file.transferTo(mainPath.toFile());
-            } else if (".png".equals(saveExt)) {
+            // 无论大小一律重新编码（不再有「小图原样落盘」）：
+            // 原样落盘会把 EXIF 一起带出去 —— 手机照片里的 GPS 坐标、设备型号、
+            // 精确拍摄时间全在文件里，任何人下载原图都能读到。
+            if (".png".equals(saveExt)) {
                 ImageIO.write(resize(src, MAX_EDGE), "png", mainPath.toFile());
             } else {
                 writeJpeg(resize(src, MAX_EDGE), mainPath.toFile(), MAIN_QUALITY);
             }
             // 缩略图统一走 JPEG：列表只需要清楚，不需要透明通道
             writeJpeg(resize(src, THUMB_EDGE), dir.resolve(thumbName(filename)).toFile(), THUMB_QUALITY);
-            return urlPrefix + filename;
+            return new UploadResult(urlPrefix + filename, width, height);
         } catch (BusinessException e) {
             throw e;
         } catch (IOException e) {
@@ -161,6 +183,101 @@ public class FileUtil {
         } catch (Exception e) {
             return url;
         }
+    }
+
+    /**
+     * 读 EXIF 方向标记（1–8）。读不到（PNG 没有这个概念、无 EXIF、文件损坏）一律返回 1。
+     *
+     * 解析失败选择放行而不是抛错：方向信息缺失最坏的结果是图转不正，
+     * 为此拒绝整张图会变成「昨天还能传的照片今天传不上」，得不偿失。
+     */
+    private int readOrientation(MultipartFile file) {
+        try (InputStream in = file.getInputStream()) {
+            Metadata meta = ImageMetadataReader.readMetadata(in);
+            ExifIFD0Directory dir = meta.getFirstDirectoryOfType(ExifIFD0Directory.class);
+            if (dir != null && dir.containsTag(ExifDirectoryBase.TAG_ORIENTATION)) {
+                int o = dir.getInt(ExifDirectoryBase.TAG_ORIENTATION);
+                return (o >= 1 && o <= 8) ? o : 1;
+            }
+        } catch (Exception ignored) {
+            // 非 JPEG、截断文件、异常 EXIF 段：都按「没有方向标记」处理
+        }
+        return 1;
+    }
+
+    /**
+     * 按 EXIF 方向标记把像素真正转正。
+     *
+     * EXIF 的 8 种取值本质是 4 种基础变换的组合：
+     *   2 = 水平镜像           3 = 旋转 180°         4 = 垂直镜像
+     *   5 = 主对角线镜像(转置)  6 = 顺时针 90°        7 = 副对角线镜像
+     *   8 = 逆时针 90°
+     * 其中 5/7 没有现成的 API，用「旋转 90/270 + 水平镜像」拼出来：
+     *   transpose  = 顺时针 90° 再水平镜像
+     *   transverse = 逆时针 90° 再水平镜像
+     */
+    private BufferedImage applyOrientation(BufferedImage src, int orientation) {
+        return switch (orientation) {
+            case 2 -> flip(src, true);
+            case 3 -> rotate(src, 180);
+            case 4 -> flip(src, false);
+            case 5 -> flip(rotate(src, 90), true);
+            case 6 -> rotate(src, 90);
+            case 7 -> flip(rotate(src, 270), true);
+            case 8 -> rotate(src, 270);
+            default -> src;
+        };
+    }
+
+    /** 顺时针旋转 90 / 180 / 270 度；90 与 270 会交换宽高，画布尺寸要先算对 */
+    private BufferedImage rotate(BufferedImage src, int degrees) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        boolean swap = degrees % 180 != 0;
+        BufferedImage dst = newCanvas(swap ? h : w, swap ? w : h, src);
+        Graphics2D g = dst.createGraphics();
+        switch (degrees) {
+            // Java2D 的 y 轴向下，正角度即「顺时针」
+            case 90 -> {
+                g.translate(h, 0);
+                g.rotate(Math.PI / 2);
+            }
+            case 180 -> {
+                g.translate(w, h);
+                g.rotate(Math.PI);
+            }
+            default -> {
+                g.translate(0, w);
+                g.rotate(-Math.PI / 2);
+            }
+        }
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return dst;
+    }
+
+    /** 镜像：horizontal=true 左右翻，false 上下翻 */
+    private BufferedImage flip(BufferedImage src, boolean horizontal) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        BufferedImage dst = newCanvas(w, h, src);
+        Graphics2D g = dst.createGraphics();
+        if (horizontal) {
+            g.translate(w, 0);
+            g.scale(-1, 1);
+        } else {
+            g.translate(0, h);
+            g.scale(1, -1);
+        }
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return dst;
+    }
+
+    /** 建一张与源图色彩模型一致的空画布：有 alpha 用 ARGB，否则 RGB（否则透明区变黑） */
+    private BufferedImage newCanvas(int w, int h, BufferedImage like) {
+        return new BufferedImage(w, h,
+                like.getColorModel().hasAlpha() ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
     }
 
     /** 等比缩到长边不超过 maxEdge；已经更小则原样返回 */

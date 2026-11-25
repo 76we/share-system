@@ -112,7 +112,7 @@ public class MomentServiceImpl implements MomentService {
             throw new BusinessException("最多上传9张图片");
         }
 
-        List<String> uploaded = new ArrayList<>();
+        List<FileUtil.UploadResult> uploaded = new ArrayList<>();
         try {
             if (images != null) {
                 for (MultipartFile file : images) {
@@ -125,13 +125,13 @@ public class MomentServiceImpl implements MomentService {
             transactionTemplate.executeWithoutResult(status -> insertMoment(dto, userId, uploaded));
         } catch (RuntimeException e) {
             // 上传到第 N 张失败、或插库失败：这一批已落盘的文件全部回收
-            fileUtil.deleteAll(uploaded);
+            fileUtil.deleteAll(uploaded.stream().map(FileUtil.UploadResult::url).toList());
             throw e;
         }
     }
 
     /** 事务内只做插库，务必保持短小：不要在这里做图片处理或任何阻塞 IO */
-    private void insertMoment(MomentDTO dto, Long userId, List<String> uploaded) {
+    private void insertMoment(MomentDTO dto, Long userId, List<FileUtil.UploadResult> uploaded) {
         Moment moment = new Moment();
         moment.setTitle(dto.getTitle());
         moment.setContent(dto.getContent());
@@ -143,10 +143,13 @@ public class MomentServiceImpl implements MomentService {
         momentMapper.insert(moment);
 
         int order = 0;
-        for (String url : uploaded) {
+        for (FileUtil.UploadResult up : uploaded) {
             MomentImage img = new MomentImage();
             img.setMomentId(moment.getId());
-            img.setUrl(url);
+            img.setUrl(up.url());
+            // 尺寸落库：前端据此按真实比例占位，竖图不再被固定比例裁成横条
+            img.setWidth(up.width());
+            img.setHeight(up.height());
             img.setSortOrder(order++);
             momentImageMapper.insert(img);
         }
@@ -329,18 +332,14 @@ public class MomentServiceImpl implements MomentService {
                 new LambdaQueryWrapper<MomentImage>().in(MomentImage::getMomentId, momentIds)
                         .orderByAsc(MomentImage::getSortOrder)
         );
-        Map<Long, List<String>> imageMap = allImages.stream().collect(Collectors.groupingBy(
-                MomentImage::getMomentId,
-                Collectors.mapping(MomentImage::getUrl, Collectors.toList())
-        ));
+        Map<Long, List<MomentImage>> imageMap = allImages.stream()
+                .collect(Collectors.groupingBy(MomentImage::getMomentId));
 
         boolean useRedisCount = likeCountMap != null && collectCountMap != null;
         List<MomentVO> vos = records.stream().map(m -> {
             MomentVO vo = new MomentVO();
             // 列表只给缩略图（720px），原图留给详情页；老图没有缩略图时 thumbUrl 会回退原图
-            List<String> imgs = imageMap.get(m.getId());
-            fillBase(vo, m, userMap.get(m.getUserId()),
-                    imgs == null ? null : imgs.stream().map(fileUtil::thumbUrl).toList());
+            fillBase(vo, m, userMap.get(m.getUserId()), imageMap.get(m.getId()), true);
             if (useRedisCount) {
                 vo.setLikeCount(likeCountMap.getOrDefault(m.getId(), 0));
                 vo.setCollectCount(collectCountMap.getOrDefault(m.getId(), 0));
@@ -433,12 +432,12 @@ public class MomentServiceImpl implements MomentService {
 
             vo = new MomentDetailVO();
             User user = userMapper.selectById(m.getUserId());
-            List<String> images = momentImageMapper.selectList(
+            List<MomentImage> images = momentImageMapper.selectList(
                     new LambdaQueryWrapper<MomentImage>()
                             .eq(MomentImage::getMomentId, id)
-                            .orderByAsc(MomentImage::getSortOrder))
-                    .stream().map(MomentImage::getUrl).toList();
-            fillBase(vo, m, user, images);
+                            .orderByAsc(MomentImage::getSortOrder));
+            // 详情页要原图，不吃缩略图
+            fillBase(vo, m, user, images, false);
 
             vo.setComments(commentService.getCommentTree(id));
             cacheService.putDetail(id, vo);
@@ -561,14 +560,25 @@ public class MomentServiceImpl implements MomentService {
         }
     }
 
-    // 装配动态基础信息（作者昵称头像 + 图片列表），列表与详情共用
-    private void fillBase(MomentVO vo, Moment m, User user, List<String> images) {
+    // 装配动态基础信息（作者昵称头像 + 图片列表 + 图片尺寸），列表与详情共用
+    // useThumb：列表取缩略图省带宽，详情取原图；尺寸两种场景都给（比例与原图一致）
+    private void fillBase(MomentVO vo, Moment m, User user, List<MomentImage> images, boolean useThumb) {
         BeanUtils.copyProperties(m, vo);
         if (user != null) {
             vo.setNickname(user.getNickname());
             vo.setAvatar(user.getAvatar());
         }
-        vo.setImages(images == null ? new ArrayList<>() : images);
+        List<String> urls = new ArrayList<>();
+        List<com.we.sharesystem.vo.ImageSizeVO> sizes = new ArrayList<>();
+        if (images != null) {
+            for (MomentImage img : images) {
+                urls.add(useThumb ? fileUtil.thumbUrl(img.getUrl()) : img.getUrl());
+                // 老图 width/height 为空时照样塞进去（值为 null），前端见到 null 就走固定比例兜底
+                sizes.add(new com.we.sharesystem.vo.ImageSizeVO(img.getUrl(), img.getWidth(), img.getHeight()));
+            }
+        }
+        vo.setImages(urls);
+        vo.setImageSizes(sizes);
     }
 
 }

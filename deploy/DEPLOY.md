@@ -297,6 +297,25 @@ location /images/ {
 
 数据库里只存 `/images/xxx.jpg` 这样的相对路径，所以换机器、换域名时数据不用改。
 
+### 图片的可见性边界（别误解成「有鉴权」）
+
+图片由 nginx 直接从磁盘发，**不做登录校验**。所以「把照片墙设成私密」到底保护了什么？
+
+结论：照片墙里的图，全部来自该用户**已发布的公开动态**（`moment_image` 存的就是动态的图）。
+动态本身公开，图当然也公开 —— 「私密墙」保护的是**聚合视图**（一张张翻完某人所有照片这件事），
+不是单张图的机密性。接口层已经拦住了：墙私密时 `/wall/other/...` 直接拒绝。
+
+真正需要防的是另外两件事，已在 nginx 里配好：
+
+| 配置 | 防什么 |
+|---|---|
+| `X-Robots-Tag: noindex, noimageindex` | 搜索引擎把用户照片收进图片结果（用户没同意过的公开） |
+| `valid_referers` 防盗链 | 别的站点直接 `<img src>` 引用，烧掉你的 30M 带宽 |
+
+什么时候才需要升级成「签名 URL」：等动态本身要支持「仅好友可见 / 仅自己可见」。
+那时同一张图对 A 可见、对 B 不可见，UUID 文件名就不够了，得由后端签发带过期时间的地址
+（`?e=...&s=hmac`），nginx 用 `secure_link` 校验。现在没有这个需求，不做。
+
 ### 备份：三层，缺一层都不算安全
 
 | 层 | 内容 | 频率 | 保留 | 防什么 |
@@ -455,12 +474,17 @@ cd /opt/share && BACKEND_TAG=latest docker compose up -d --no-deps backend
 - `paths-ignore` 里排除了 `**.md` 和 `deploy/**`：改文档不会触发发版
 - 历史镜像只保留最近 5 个，否则按 sha 打的 tag 会累积几个 G
 
-### 前端不在这个流程里
+### 前端另有一个独立流程
 
-前端是另一个仓库（`share-frontend`）。要自动化就照这份 workflow 写一份，把
-`mvn package` 换成 `npm ci && npm run build`，上传那步换成
-`rsync -av --delete dist/ /opt/share/frontend/dist/` —— **不需要重启任何服务**，
-nginx 直接读磁盘上的新文件。
+前端是另一个仓库（`share-frontend`），已有自己的 `.github/workflows/deploy.yml`：
+`npm ci` → `npm run build` → `rsync -av --delete dist/ /opt/share/frontend/dist/`。
+**不需要重启任何服务**，nginx 直接读磁盘上的新文件。
+
+注意两点：
+- Secrets 要在**前端仓库**里单独再配一遍（`SSH_HOST` / `SSH_USER` / `SSH_KEY` / `SSH_PORT`），
+  GitHub 的 Secrets 不跨仓库共享。
+- 可选配一个仓库变量 `SITE_URL`（Settings → Variables），配了才会在发布后做一次
+  `curl` 冒烟检查；不配就跳过，不影响发布。
 
 ---
 
@@ -502,11 +526,13 @@ nginx 直接读磁盘上的新文件。
 - Docker Compose 编排（MySQL + Redis + 后端，数据走 bind mount）
 - 备份与恢复脚本 `deploy/backup.sh` / `deploy/restore.sh`（含真实恢复演练）
 - GitHub Actions 自动部署（`push` 即上线，健康检查不过不移动 latest）
+- 上传图片统一重编码（剥离 EXIF/GPS，按 EXIF Orientation 把竖拍像素真正转正）
+- 记录图片原始宽高（`moment_image.width/height`，前端按真实比例占位）
+- 字体自托管（`scripts/fetch-fonts.mjs` 抓 Google Fonts 分片，不再依赖外部 CDN）
+- 图片外链加固（`X-Robots-Tag` + 防盗链）
 
 还没做：
 - **备份 cron 还没装**。脚本写好了也测过了，但要在服务器上配一次才会每天跑，见 §9。
-- 前端仓库的 CI（见 §10 末尾，照抄改两行即可）。
 - Spring Boot 3.2.10 已过开源支持期（2024-11 结束），不再收安全补丁。
   升 3.3/3.4 需要一轮回归，建议单独排期。
-- 自托管字体：前端现在用 Google Fonts，国内基本连不上，会退化成系统字体。
 - HTTPS：`certbot --nginx` 一条命令的事，但要在域名解析生效之后做。

@@ -17,6 +17,8 @@ public class MomentVO {
     private String nickname;
     private String avatar;
     private List<String> images;
+    /** 与 images 同序的尺寸信息；老图为 null 的宽高，前端回退到固定比例 */
+    private List<ImageSizeVO> imageSizes;
     private  Integer likeCount;
     private Integer commentCount;
     private Integer collectCount;

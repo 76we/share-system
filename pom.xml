@@ -113,6 +113,16 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>
         </dependency>
+
+        <!-- 读 EXIF 方向标记。手机竖拍的照片像素是横的，靠 EXIF Orientation 让浏览器转正；
+             一旦重编码丢元数据，方向标记也一起没了 —— 竖拍照片会集体横躺。
+             所以要在剥离 EXIF 之前先把方向读出来、把像素真正转正。
+             只读文件头，不解析整张图，开销可以忽略。 -->
+        <dependency>
+            <groupId>com.drewnoakes</groupId>
+            <artifactId>metadata-extractor</artifactId>
+            <version>2.19.0</version>
+        </dependency>
         <!-- lombok、validation、mybatis-plus 你项目已有就不用重复引 -->
 
 
