@@ -198,6 +198,11 @@ rsync -av --delete dist/ root@your.server:/opt/share/frontend/dist/
 
 前端不用重启任何服务 —— nginx 直接读磁盘上的新文件。
 
+> **首次 rsync 会传 ~7MB**：字体已自托管（`public/fonts/` 下 184 个 woff2 分片），
+> 构建时会被原样拷进 `dist/`。之后没换字体就不会再传，`rsync` 只发变化的文件。
+>
+> 日常也可以不手动 rsync：前端仓库 push 到 main 后由 CI 自动发布（见 §10 末尾）。
+
 > 接口地址是相对路径 `/api`，靠 nginx 的 `proxy_pass .../` 去掉前缀。
 > 后端换端口只改 nginx，不用重新构建前端。
 
