@@ -100,6 +100,19 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+
+        <!-- 数据库版本控制：表结构不再靠手工执行 SQL。
+             Flyway 8.2 起把各数据库的支持拆成独立模块，只引 flyway-core 会在
+             启动时报 "Unsupported Database: MySQL"，必须同时引 flyway-mysql。
+             版本由 spring-boot-starter-parent 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
         <!-- lombok、validation、mybatis-plus 你项目已有就不用重复引 -->
 
 

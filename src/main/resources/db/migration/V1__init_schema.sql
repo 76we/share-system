@@ -1,16 +1,18 @@
 -- ============================================================================
--- 尘叙阁（CHEN XU PAVILION）数据库结构脚本
+-- V1 · 基线：尘叙阁全部表结构 + 话题初始数据
 --
--- 用法（服务器上）：
---   mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sharing DEFAULT CHARSET utf8mb4;"
---   mysql -ushare -p sharing < schema.sql
+-- 这个文件对应「接入 Flyway 之前」用 mysql < schema.sql 手工建出来的结构。
+-- 执行后会在 flyway_schema_history 里留一条 version = 1 的记录。
 --
--- 重要：本脚本可重复执行且【不会删除任何已有数据】。
---   早期版本由 mysqldump 导出，每张表前都带 DROP TABLE IF EXISTS，
---   上线后如果有人照着文档再执行一次，整个库会被清空。
---   现在全部改成 CREATE TABLE IF NOT EXISTS + INSERT IGNORE。
---
--- 说明：只包含表结构 + 话题初始数据，不含用户/动态等业务数据。
+-- 三条必须守住的规则：
+--   1. 本文件一旦在任一环境执行过，就不要再改内容。Flyway 会校验 checksum，
+--      改动会导致下次启动直接失败（Migration checksum mismatch）。
+--      要调整结构，新增 V2__xxx.sql，历史只往后长。
+--   2. MySQL 的 DDL 不支持事务回滚。如果这个脚本执行到一半失败，
+--      已建的表会留下来，需要手工清理再重跑。所以执行期间不要切断数据库连接。
+--   3. 保留 IF NOT EXISTS 是有意的：让「已经手工建过表的库」也能安全接入。
+--      代价是表已存在时不校验结构差异 —— 结构一致性由 Flyway 历史记录保证，
+--      此后不要再绕过 Flyway 手工建表或改表。
 -- ============================================================================
 
 -- ---------------------------------------------------------------- 用户
@@ -61,7 +63,8 @@ CREATE TABLE IF NOT EXISTS `moment` (
   PRIMARY KEY (`id`),
   KEY `idx_topic_time` (`topic_id`,`create_time`),
   KEY `idx_status_time` (`status`,`create_time`),
-  -- 个人中心 / 照片墙都是「某人的已发布动态按时间倒序」，走这条复合索引可免掉 filesort
+  -- 个人中心 / 照片墙都是「某人的已发布动态按时间倒序」，走这条复合索引可免掉 filesort。
+  -- 它的最左前缀就是 user_id，所以原来单独的 idx_user 是冗余的，已在 V1 里省掉。
   KEY `idx_user_status_time` (`user_id`,`status`,`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分享动态表';
 
@@ -174,7 +177,8 @@ CREATE TABLE IF NOT EXISTS `photo` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ============================================================================
--- 话题初始数据（INSERT IGNORE：重复执行不会报错，也不会覆盖已有话题）
+-- 话题初始数据。属于「结构的一部分」（前端筛选、发布页下拉都依赖这 5 条），
+-- 所以放在 V1 而不是单独的迁移里。INSERT IGNORE 保证重复接入不报错、不覆盖。
 -- ============================================================================
 INSERT IGNORE INTO `topic` (`id`, `name`, `description`) VALUES
   (1, '旅行', '记录路途所见'),

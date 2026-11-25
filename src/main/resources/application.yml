@@ -11,6 +11,22 @@ spring:
       # 不会提示「总共超了」，所以必须让请求上限容得下最坏情况，否则这条限制是假的。
       max-file-size: 5MB
       max-request-size: 48MB
+
+  # 表结构版本控制。迁移脚本在 src/main/resources/db/migration，命名 V<版本>__<说明>.sql
+  # 规则：脚本一旦被执行过就不要再改内容（Flyway 会校验 checksum，改了直接启动失败），
+  #      要调整结构就新增一个 V2、V3，历史只往后长。
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 首次接入时库里的表是手工建的，Flyway 不知道，会把「当前结构」当成 baseline 记录一条，
+    # 然后把 version <= baseline-version 的脚本跳过。线上空库不会触发 baseline，V1 会真正执行建表。
+    baseline-on-migrate: true
+    baseline-version: 1
+    baseline-description: 接入 Flyway 前的现有结构
+    validate-on-migrate: true
+    # 禁止 clean（会清空整个库），防误操作
+    clean-disabled: true
+
   # 注册验证码邮件：QQ 邮箱 SMTP。账号与授权码走环境变量，未配置时退化为「日志打印验证码」本地联调模式
   mail:
     host: ${MAIL_HOST:smtp.qq.com}

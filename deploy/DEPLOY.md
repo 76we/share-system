@@ -16,8 +16,8 @@
 ## 0. 前置检查（本地打包前）
 
 ```bash
-# 确认 schema.sql 存在（本次已补）
-ls src/main/resources/scripts/schema.sql
+# 确认迁移脚本存在（表结构由 Flyway 管理，应用启动时自动执行）
+ls src/main/resources/db/migration/
 
 # 打包（跳过测试）
 mvn -o clean package -DskipTests
@@ -45,23 +45,66 @@ systemctl enable --now redis
 
 ---
 
-## 2. 建库并导入结构
+## 2. 建库与账号（表结构不用手工导）
 
 ```bash
-mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sharing DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;"
+mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS sharing DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
 
-# 建一个专用账号，不要用 root 跑业务
+# 建一个专用账号，不要用 root 跑业务。
+# 注意：必须给 DDL 权限（CREATE/ALTER/DROP/INDEX/REFERENCES），
+# 否则应用启动时 Flyway 建 flyway_schema_history、建表会直接报 Access denied。
 mysql -uroot -p -e "
 CREATE USER 'share'@'127.0.0.1' IDENTIFIED BY '换成真实密码';
-GRANT SELECT,INSERT,UPDATE,DELETE ON sharing.* TO 'share'@'127.0.0.1';
+GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,DROP,INDEX,REFERENCES ON sharing.* TO 'share'@'127.0.0.1';
 FLUSH PRIVILEGES;"
-
-mysql -ushare -p sharing < schema.sql
-mysql -ushare -p -e "USE sharing; SHOW TABLES;"   # 应看到 11 张表
 ```
 
-> `schema.sql` 现在可重复执行：全部是 `CREATE TABLE IF NOT EXISTS` + `INSERT IGNORE`，不会再 `DROP TABLE`。
-> 早期版本由 mysqldump 导出，每张表前带 `DROP TABLE IF EXISTS`，在已有数据的库上再跑一次就会清库 —— 老脚本不要再用。
+**表结构由 Flyway 在应用启动时自动建，不需要再手工执行 SQL。** 空库首次启动会执行
+`db/migration/V1__init_schema.sql`，建出 11 张表 + 5 条话题种子数据，并在
+`flyway_schema_history` 里记录版本。
+
+启动后这样验证：
+
+```bash
+mysql -ushare -p -e "USE sharing; SHOW TABLES;"            # 应有 12 张（11 业务 + 1 历史表）
+mysql -ushare -p -e "USE sharing; SELECT version,description,success FROM flyway_schema_history;"
+mysql -ushare -p -e "USE sharing; SELECT id,name FROM topic;"   # 应有 5 条
+```
+
+> **不要再用 mysql 手工执行建表/改表 SQL。** 绕过 Flyway 改结构会让历史记录和实际库对不上，
+> 下次部署时很难判断「线上到底缺哪个字段」。要改结构就新增 `V2__xxx.sql`，跟着应用一起发。
+>
+> 已有的库（比如本地开发库）第一次接进来时，Flyway 会把当前结构登记为 baseline=1、
+> 不重复执行 V1，日志里是 `Successfully baselined schema with version: 1`。这是正常的。
+>
+> 单账号给足 DDL 权限是为了省事。若以后要更严格的最小权限，可拆成两个账号：
+> 迁移账号（DDL 全权限，只在启动时用）+ 业务账号（仅 CRUD）。
+
+---
+
+### 以后怎么改表
+
+新增一个迁移文件，跟着应用一起发布，启动时自动执行。例：给动态加一个「是否置顶」字段：
+
+```sql
+-- 文件名：src/main/resources/db/migration/V2__add_moment_pinned.sql
+ALTER TABLE `moment`
+  ADD COLUMN `pinned` tinyint NOT NULL DEFAULT '0' COMMENT '是否置顶' AFTER `mood`;
+```
+
+四条规则：
+
+1. **文件名必须是 `V<数字>__<说明>.sql`**（两个下划线），版本号递增。别跳号后又回头补。
+2. **已执行过的脚本一个字都不能改。** Flyway 会比对文件 checksum，改了直接启动失败
+   （`Migration checksum mismatch`）。要修正就新增下一个版本去改它。
+3. **MySQL 的 DDL 不支持事务回滚。** 迁移执行到一半失败，已生效的部分会留在库里，
+   要手工修好再删掉历史表里那条 `success=0` 的记录（然后重启重跑）。所以改表前先备份。
+4. **上线前先看会跑什么。** 启动日志里的 `Migrating schema ... to version "2 - xxx"`
+   就是本次要执行的内容，不确定就先在测试库跑一遍。
+
+> 唯一的例外：如果某个脚本刚发出去就发现写错了，且**只有你一个人用过这套库**，
+> 可以改脚本后让 Flyway 重算 checksum（`mvn flyway:repair` 或临时把
+> `validate-on-migrate` 关掉一次）。有其他人在用时禁止这么做 —— 会篡改历史。
 
 ---
 
