@@ -399,7 +399,72 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ---
 
-## 10. 常见坑
+## 10. 自动部署（GitHub Actions）
+
+配置一次，之后 `git push` 到 main 就自动上线。workflow 在 `.github/workflows/deploy.yml`。
+
+### 一次性配置
+
+在 GitHub 仓库 **Settings → Secrets and variables → Actions** 里加三个（第四个可选）：
+
+| Secret | 值 |
+|---|---|
+| `SSH_HOST` | 服务器 IP |
+| `SSH_USER` | 登录用户（能 sudo 或用 docker 的账号） |
+| `SSH_KEY` | 部署专用私钥，整段贴进去（含 `BEGIN`/`END` 两行） |
+| `SSH_PORT` | 可选，默认 22 |
+
+**密钥要单独生成一把**，不要用你日常登录的那把：
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/share-deploy -N ""
+ssh-copy-id -i ~/.ssh/share-deploy.pub user@your.server
+cat ~/.ssh/share-deploy        # 整段内容是 SSH_KEY 的值
+```
+
+理由很实际：这把私钥放在 GitHub 上，泄露就等于把服务器交出去。专用密钥可以单独吊销，
+不影响你其他机器；用日常那把则要全部换。
+
+服务器侧只需要两个前提：`/opt/share` 是 git clone 出来的（workflow 里要 `git pull`），
+`deploy/share-system.env` 已填好（它不进 git，workflow 不会碰它）。
+
+### 一次部署做了什么
+
+```
+GitHub runner             服务器
+──────────────           ─────────────────────────────
+mvn package        →     接收 jar（scp）
+                          git pull --ff-only
+                          docker compose build backend
+                          docker compose up -d backend（只重建后端）
+                          curl /actuator/health 轮询 120 秒
+                          通过 → docker tag ...:latest
+```
+
+**镜像 tag 是 commit 前 7 位，只有健康检查通过才把 `latest` 移过去。**
+所以 `latest` 永远是「最后一个成功版本」，出问题回滚就是一条命令：
+
+```bash
+cd /opt/share && BACKEND_TAG=latest docker compose up -d --no-deps backend
+```
+
+如果反着做（先覆盖 latest 再检查），失败时你就没有回滚目标了。
+
+其它细节：
+- 同一时间只允许一个部署（`concurrency`），避免两次推送交叉覆盖
+- `paths-ignore` 里排除了 `**.md` 和 `deploy/**`：改文档不会触发发版
+- 历史镜像只保留最近 5 个，否则按 sha 打的 tag 会累积几个 G
+
+### 前端不在这个流程里
+
+前端是另一个仓库（`share-frontend`）。要自动化就照这份 workflow 写一份，把
+`mvn package` 换成 `npm ci && npm run build`，上传那步换成
+`rsync -av --delete dist/ /opt/share/frontend/dist/` —— **不需要重启任何服务**，
+nginx 直接读磁盘上的新文件。
+
+---
+
+## 11. 常见坑
 
 按「排查顺序」排列，前三条覆盖了 80% 的情况。
 
@@ -425,7 +490,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ---
 
-## 11. 后续
+## 12. 后续
 
 已完成：
 - 健康检查 `/actuator/health`（DB、Redis 探针，邮件探针已关）
@@ -434,10 +499,14 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 - 图片回收任务 `PhotoPurgeTask`（软删满 30 天物理删图）
 - 图片巡检脚本 `deploy/photo-maintenance.sh`
 - 容器日志大小限制（防撑爆磁盘）
+- Docker Compose 编排（MySQL + Redis + 后端，数据走 bind mount）
+- 备份与恢复脚本 `deploy/backup.sh` / `deploy/restore.sh`（含真实恢复演练）
+- GitHub Actions 自动部署（`push` 即上线，健康检查不过不移动 latest）
 
 还没做：
-- 自动备份脚本（`deploy/backup.sh`）+ cron，见 §9
-- GitHub Actions 自动部署（push 即上线）
+- **备份 cron 还没装**。脚本写好了也测过了，但要在服务器上配一次才会每天跑，见 §9。
+- 前端仓库的 CI（见 §10 末尾，照抄改两行即可）。
 - Spring Boot 3.2.10 已过开源支持期（2024-11 结束），不再收安全补丁。
   升 3.3/3.4 需要一轮回归，建议单独排期。
 - 自托管字体：前端现在用 Google Fonts，国内基本连不上，会退化成系统字体。
+- HTTPS：`certbot --nginx` 一条命令的事，但要在域名解析生效之后做。

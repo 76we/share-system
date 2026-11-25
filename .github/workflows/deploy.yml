@@ -1,0 +1,125 @@
+# 后端自动部署：push 到 main 之后自动构建、上传、重启容器。
+#
+# 为什么构建放在 GitHub 的 runner 上而不是服务器：
+#   服务器只有 2核4G，跑一次 mvn package（含下载依赖）要吃满 CPU 十几分钟，
+#   这段时间线上服务会明显变慢。runner 免费且不占服务器资源，
+#   服务器只做最后一步 docker build（只拷 jar，几秒钟）。
+#
+# 部署策略：镜像按 commit sha 打 tag，健康检查通过后才更新 latest。
+#   这样「latest 永远指向最后一个成功的版本」，回滚只需
+#   BACKEND_TAG=latest docker compose up -d backend。
+#   如果先覆盖 latest 再检查，回滚就没有目标了。
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    # 只改文档或部署脚本时不用重新发版（nginx 配置改了要手工 reload，不走这条线）
+    paths-ignore:
+      - '**.md'
+      - 'deploy/**'
+      - '.gitignore'
+      - '.gitattributes'
+  workflow_dispatch:        # 支持在 Actions 页面手动触发
+
+# 同一时间只允许一个部署在跑，避免两次推送交叉覆盖
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: 打包
+        run: mvn -B -DskipTests package
+
+      - name: 记录版本号
+        id: vars
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: 配置 SSH
+        # 用专用部署密钥（只对这一个仓库的 deploy key），不要用日常登录的那把：
+        # 这把私钥放在 GitHub Secrets 里，泄露等于把服务器交出去，
+        # 专用密钥可以单独吊销，不影响你其他机器。
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 首次连接要把主机公钥记下来，否则 ssh 会交互式询问。
+          # 更严格的做法是把 host key 也存成 secret（防中间人），
+          # 个人项目这里用 keyscan 够用。
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 上传 jar
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT || 22 }}" \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              "mkdir -p /opt/share/target"
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.SSH_PORT || 22 }}" \
+              target/share-system-*.jar \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/share/target/"
+
+      - name: 远程部署并健康检查
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT || 22 }}" \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              bash -s -- "${{ steps.vars.outputs.tag }}" <<'REMOTE'
+          set -euo pipefail
+          TAG="$1"
+          cd /opt/share
+
+          echo "==> 同步编排与 Dockerfile"
+          # 只快进，不允许在服务器上产生本地提交（否则下次拉取会冲突，
+          # 而那时你正在救火，不该花时间处理 merge）
+          git pull --ff-only
+
+          echo "==> 构建镜像 share-backend:$TAG"
+          BACKEND_TAG="$TAG" docker compose build backend
+
+          echo "==> 启动（mysql / redis 不受影响，只有 backend 重建）"
+          BACKEND_TAG="$TAG" docker compose up -d --no-deps backend
+
+          echo "==> 等待健康检查（最多 120 秒）"
+          for i in $(seq 1 24); do
+            if curl -fsS http://127.0.0.1:8080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
+              echo "健康检查通过，标记 latest"
+              # 只有成功才移动 latest —— 它必须始终指向最后一个可用的版本
+              docker tag "share-backend:$TAG" share-backend:latest
+
+              # 按 commit sha 打的 tag 会一直累积，一个 44MB 的 jar 乘几十个版本
+              # 就能占掉几个 G。只保留最近 5 个（latest 单独保护，不参与排序）。
+              docker images 'share-backend' --format '{{.Tag}} {{.CreatedAt}}' 2>/dev/null \
+                | grep -v '^latest ' | sort -k2 -r | tail -n +6 | awk '{print $1}' \
+                | xargs -r -I{} docker rmi "share-backend:{}" >/dev/null 2>&1 || true
+
+              echo "DEPLOY_OK"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "!! 健康检查失败，最近 50 行日志："
+          docker compose logs --tail=50 backend
+          echo "!! 回滚命令（latest 仍是上一个成功版本）："
+          echo "   cd /opt/share && BACKEND_TAG=latest docker compose up -d --no-deps backend"
+          exit 1
+          REMOTE
+
+      - name: 失败提示
+        if: failure()
+        run: |
+          echo "部署失败。服务器上保留了失败版本的镜像 share-backend:${{ steps.vars.outputs.tag }} 供排查。"
+          echo "latest 仍指向上一个成功版本，回滚命令："
+          echo "  cd /opt/share && BACKEND_TAG=latest docker compose up -d --no-deps backend"
