@@ -3,5 +3,10 @@
 # 一旦脚本被转成 CRLF，服务器上会直接报 "bad interpreter: /bin/bash^M"。
 *.sh text eol=lf
 
+# Flyway 迁移脚本必须是 LF。
+# Flyway 按文件字节算 checksum，同一份 V1 在 Windows（CRLF）和 Linux（LF）
+# 打包出来的 checksum 不同 —— 本地跑过、CI 构建后就报 Migration checksum mismatch。
+*.sql text eol=lf
+
 # 这个文件本身也必须保持 LF，否则 CRLF 会让上面的模式匹配失效
 .gitattributes text eol=lf
