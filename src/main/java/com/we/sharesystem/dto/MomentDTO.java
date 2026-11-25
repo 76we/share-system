@@ -17,6 +17,10 @@ public class MomentDTO {
     private Long topicId;
     /** 自定义话题名（前端"其它"输入），传了则按名称查/建话题，优先于 topicId */
     private String topicName;
+    /** 与 moment.location 的 varchar(128) 对齐；前端有 maxlength，但接口不能指望前端 */
+    @Size(max = 128, message = "地点最多 128 字")
     private String location;
+    /** 与 moment.mood 的 varchar(32) 对齐 */
+    @Size(max = 32, message = "心情最多 32 字")
     private String mood;
 }

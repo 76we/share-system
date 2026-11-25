@@ -21,11 +21,14 @@ import com.we.sharesystem.service.MomentCommentService;
 import com.we.sharesystem.service.MomentService;
 import com.we.sharesystem.vo.MomentDetailVO;
 import com.we.sharesystem.vo.MomentVO;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Duration;
@@ -47,6 +50,8 @@ public class MomentServiceImpl implements MomentService {
     private static final int MAX_PAGE = 1000;
     /** 自定义话题名长度上限，与 topic.name 的 varchar(64) 及 TopicController 的校验对齐 */
     private static final int MAX_TOPIC_NAME_LENGTH = 30;
+    /** 单条动态最多 9 张图，与前端选择器上限、发布提示保持一致 */
+    private static final int MAX_IMAGES = 9;
 
     @Autowired
     private MomentMapper momentMapper;
@@ -70,6 +75,17 @@ public class MomentServiceImpl implements MomentService {
     @Autowired
     private com.we.sharesystem.common.SensitiveWordFilter sensitiveWordFilter;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    /** 用于把「插库」这一段单独圈成短事务，见 publish 的注释 */
+    private TransactionTemplate transactionTemplate;
+
+    @PostConstruct
+    void initTransactionTemplate() {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
     /** 内容合规兜底：标题与正文任一命中敏感词即拒绝，不告诉用户命中了哪个词 */
     private void validateContent(String title, String content) {
         if (sensitiveWordFilter.hit(title) || sensitiveWordFilter.hit(content)) {
@@ -77,42 +93,62 @@ public class MomentServiceImpl implements MomentService {
         }
     }
 
+    /**
+     * 发布动态。
+     *
+     * 图片处理（ImageIO 全解码 + 缩放 + 两次编码）刻意放在事务之外：
+     * 原先整个方法是 @Transactional，且「先插 moment、再逐张上传」，
+     * 9 张图会把一条数据库连接占住 2~5 秒。Hikari 池只有 20 条连接，
+     * 几个人同时发图就能把池子耗干，后续请求在 connection-timeout(30s) 后集体失败；
+     * 解码缓冲叠加在 -Xmx512m 上也有 OOM 风险。
+     *
+     * 现在的顺序：先落盘拿 URL（无事务、不占连接）→ 再开短事务插库（毫秒级）。
+     * 任何一步失败都把这一批已落盘的文件删掉，不留孤儿。
+     */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void publish(MomentDTO dto, Long userId, List<MultipartFile> images) {
         validateContent(dto.getTitle(), dto.getContent());
+        if (images != null && images.size() > MAX_IMAGES) {
+            throw new BusinessException("最多上传9张图片");
+        }
+
         List<String> uploaded = new ArrayList<>();
         try {
-            if(images!=null && images.size()>9){
-                throw new BusinessException("最多上传9张图片");
-            }
-            Moment moment = new Moment();
-            moment.setTitle(dto.getTitle());
-            moment.setContent(dto.getContent());
-            moment.setTopicId(resolveTopicId(dto));
-            moment.setLocation(dto.getLocation());
-            moment.setMood(dto.getMood());
-            moment.setUserId(userId);
-            moment.setStatus(1);
-            momentMapper.insert(moment);
-
-            if(images!=null){
-                int order = 0;
-                for(MultipartFile file : images) {
-                    if(file==null || file.isEmpty())
+            if (images != null) {
+                for (MultipartFile file : images) {
+                    if (file == null || file.isEmpty()) {
                         continue;
-                    String url = fileUtil.upload(file);
-                    uploaded.add(url);
-                    MomentImage img = new MomentImage();
-                    img.setMomentId(moment.getId());
-                    img.setUrl(url);
-                    img.setSortOrder(order++);
-                    momentImageMapper.insert(img);
+                    }
+                    uploaded.add(fileUtil.upload(file));
                 }
             }
+            transactionTemplate.executeWithoutResult(status -> insertMoment(dto, userId, uploaded));
         } catch (RuntimeException e) {
+            // 上传到第 N 张失败、或插库失败：这一批已落盘的文件全部回收
             fileUtil.deleteAll(uploaded);
             throw e;
+        }
+    }
+
+    /** 事务内只做插库，务必保持短小：不要在这里做图片处理或任何阻塞 IO */
+    private void insertMoment(MomentDTO dto, Long userId, List<String> uploaded) {
+        Moment moment = new Moment();
+        moment.setTitle(dto.getTitle());
+        moment.setContent(dto.getContent());
+        moment.setTopicId(resolveTopicId(dto));
+        moment.setLocation(dto.getLocation());
+        moment.setMood(dto.getMood());
+        moment.setUserId(userId);
+        moment.setStatus(1);
+        momentMapper.insert(moment);
+
+        int order = 0;
+        for (String url : uploaded) {
+            MomentImage img = new MomentImage();
+            img.setMomentId(moment.getId());
+            img.setUrl(url);
+            img.setSortOrder(order++);
+            momentImageMapper.insert(img);
         }
 
         // 发布新动态后，所有列表缓存都失效（新内容应出现在最新榜/各筛选页）。

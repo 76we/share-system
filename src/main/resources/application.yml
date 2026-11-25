@@ -6,8 +6,11 @@ spring:
     time-zone: Asia/Shanghai
   servlet:
     multipart:
+      # 单张 5MB、最多 9 张，理论上限 45MB。
+      # 原来写 20MB，用户选 6 张手机直出图就整体 413 —— 前端只校验了单张体积，
+      # 不会提示「总共超了」，所以必须让请求上限容得下最坏情况，否则这条限制是假的。
       max-file-size: 5MB
-      max-request-size: 20MB
+      max-request-size: 48MB
   # 注册验证码邮件：QQ 邮箱 SMTP。账号与授权码走环境变量，未配置时退化为「日志打印验证码」本地联调模式
   mail:
     host: ${MAIL_HOST:smtp.qq.com}
@@ -43,4 +46,29 @@ app:
     # 发件人显示名与地址；留空时取 spring.mail.username
     from-name: ${MAIL_FROM_NAME:尘叙阁}
     from: ${MAIL_FROM:}
+  # 图片回收：软删满 N 天后物理删除 moment_image 行与磁盘文件
+  photo:
+    purge-enabled: ${PHOTO_PURGE_ENABLED:true}
+    purge-days: ${PHOTO_PURGE_DAYS:30}
+    # 每天 03:40，避开备份（03:00）与访问高峰
+    purge-cron: ${PHOTO_PURGE_CRON:0 40 3 * * ?}
+
+# 健康检查：只暴露 health，且不显示细节（内部监控只需要 UP/DOWN）
+# 注意 nginx 只反代了 /api/ 与静态文件，actuator 不会暴露到公网
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    # 关掉邮件探针：它每次都会真的连一次 QQ SMTP，而邮件只是注册/找回密码的旁路，
+    # 挂了不影响看帖发帖。开着的话 SMTP 抖一下整个 health 变 DOWN，
+    # 监控就会去重启一个其实完全正常的服务（这条在本地已经实测踩到过）。
+    mail:
+      enabled: false
 

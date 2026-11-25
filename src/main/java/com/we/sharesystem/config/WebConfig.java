@@ -43,6 +43,9 @@ public class WebConfig implements WebMvcConfigurer {
                         "/likes/count",
                         "/collects/count",
                         "/images/**",
+                        // 健康检查：给 systemd / 外部监控用，不需要登录。
+                        // 只暴露 health（见 application.yml 的 management.endpoints）
+                        "/actuator/**",
                         // 分享落地页必须匿名可访问：微信爬虫不会带 token
                         "/share/**",
                         "/error"

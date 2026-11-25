@@ -94,6 +94,12 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-pool2</artifactId>
         </dependency>
+        <!-- 健康检查：只暴露 /actuator/health（DB、Redis 探针自动装配），
+             部署后 systemd / 外部监控靠它区分「进程活着」和「服务可用」 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <!-- lombok、validation、mybatis-plus 你项目已有就不用重复引 -->
 
 

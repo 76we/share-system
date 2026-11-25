@@ -146,6 +146,66 @@ nginx -t && systemctl reload nginx
 | 分页上限 | `?size=10000` | 最多返回 50 条 |
 | 异常有日志 | 请求一个不存在的接口 | `logs/stdout.log` 里有 ERROR 堆栈 |
 | 重启自愈 | `systemctl restart share-system` | 10 秒内恢复 |
+| 健康检查 | `curl -s 127.0.0.1:8080/actuator/health` | `{"status":"UP"}` 且 HTTP 200（DOWN 是 503） |
+
+> 健康检查只暴露 `/actuator/health`，且 `show-details: never`（只看 UP/DOWN，不吐数据库地址）。
+> nginx 只反代 `/api/`，所以它不会出现在公网，只给本机 systemd / 监控用。
+> 邮件探针已关闭：SMTP 抖动不该让整个服务被判定为不健康。
+
+## 7.5 图片存储（上线后必须每天盯）
+
+### ① 放独立数据盘
+系统盘写满会连带 MySQL 与日志一起挂，图片是唯一会持续增长的东西。
+
+```bash
+mkfs.ext4 /dev/vdb
+mkdir -p /data && blkid /dev/vdb            # 记下 UUID
+echo 'UUID=xxxx /data ext4 defaults,noatime 0 2' >> /etc/fstab
+mount -a
+mkdir -p /data/uploads && chown share:share /data/uploads && chmod 755 /data/uploads
+# share-system.env: UPLOAD_DIR=/data/uploads/
+# nginx:            alias /data/uploads/;
+```
+两处必须逐字符一致，否则图片全 404。CentOS 开了 SELinux 还要
+`chcon -R -t httpd_sys_content_t /data/uploads`，否则全 403。
+
+### ② 备份顺序：先 dump 库，再同步图
+
+```bash
+# /etc/cron.daily/share-backup
+mysqldump --single-transaction sharing | gzip > /tmp/db-$(date +%F).sql.gz
+rclone copy /tmp/db-*.sql.gz      oss:share-backup/db/
+rclone copy /data/uploads         oss:share-backup/uploads/    # 只增不删，用 copy 不用 sync
+find /tmp -name 'db-*.sql.gz' -mtime +3 -delete
+```
+
+顺序反了会恢复出破图：先 dump 库（T0）再同步图（T1>T0），图一定覆盖 T0 的所有引用；
+反过来做，T0~T1 之间上传的图会被库引用但备份里没有。用 `copy` 不用 `sync`：
+uploads 是只增不改的，`sync` 一旦源目录出事会把备份一起删。
+
+上线第一周做一次恢复演练，别等真丢数据时才发现备份是空的。
+
+### ③ 回收与巡检
+删除动态是软删（`status=0`），图片行与文件都还在。`PhotoPurgeTask` 每天 03:40 把
+「已删除满 `PHOTO_PURGE_DAYS`（默认 30）天」的图片真正清掉，并把 `status` 置为 -1。
+
+```bash
+# 0 3 * * *  UPLOAD_DIR=/data/uploads DB_PASS=xxx /opt/share/deploy/photo-maintenance.sh check \
+#            || 发告警
+```
+
+`check` 在磁盘 ≥80% 或有破图时 `exit 1`，可直接当告警条件。
+`orphans --delete` 清理「>30 天且全库无引用」的文件（只处理 uploads 第一层，默认只列不删）。
+
+### 容量参考
+一张图 ≈ 原图 1600px 350KB + 缩略图 720px 80KB ≈ **0.43MB**。
+100G 约 23 万张；日活 1000、人均每天 3 图时约 77 天写满。到 70% 水位就该动手扩容：
+加盘（LVM 最省事）→ 迁 OSS（只改 nginx 的 `/images/`，数据库里存的是相对路径，代码不用动）→ 上 CDN。
+
+### 带宽比磁盘先撑不住
+首屏 10 篇带图约 15 张缩略图 ≈ 1.2MB。5Mbps 固定带宽 = 625KB/s，两个人同时开首页就打满。
+该开 CDN。防盗链放 CDN 上做，别在源站加 `valid_referers`（微信内置浏览器、直接分享会被误伤）。
+
 
 ---
 
@@ -160,8 +220,18 @@ nginx -t && systemctl reload nginx
 
 ---
 
-## 9. 后续建议（本次未做）
+## 9. 后续建议
 
+已完成（本版已含）：
+- 健康检查 `/actuator/health`（DB、Redis 探针）
+- 图片回收任务 `PhotoPurgeTask`（软删满 30 天物理删图）
+- 图片巡检脚本 `deploy/photo-maintenance.sh`
+
+还没做：
 - 加 HTTPS（`certbot --nginx`），前端就别再用 http 打开。
-- 数据库与上传目录纳入定时备份（`mysqldump` + `rsync` 到 OSS）。
-- 接入健康检查：`/actuator/health`（需要加 spring-boot-starter-actuator 依赖）。
+- 数据库与上传目录纳入定时备份（`mysqldump` + `rclone` 到 OSS），见 7.5。
+- 日志轮转：`logging.file.name` 那份有 Spring 默认的 10MB/7 天滚动，
+  但 systemd 的 `StandardOutput=append:stdout.log` 没有轮转、会无限增长。
+  给 stdout.log / stderr.log 配 logrotate，或把 `StandardOutput` 改成 `journal`。
+- Spring Boot 3.2.10 已过开源支持期（2024-11 结束），不再收安全补丁；
+  升 3.3/3.4 需要一轮回归测试，建议单独排期。

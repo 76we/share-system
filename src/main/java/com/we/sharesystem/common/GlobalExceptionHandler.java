@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -98,6 +99,17 @@ public class GlobalExceptionHandler {
     public Result<Void> handleIllegalArgument(IllegalArgumentException e) {
         log.warn("参数不合法：{}", e.getMessage());
         return Result.fail(400, e.getMessage() == null ? "参数不合法" : e.getMessage());
+    }
+
+    /**
+     * 上传体积超限。
+     * 不接这个异常会落到兜底的 Exception 分支，用户看到的是「系统繁忙」，
+     * 而真实原因是自己选了 9 张手机原图 —— 提示与原因完全对不上，只能反复重试。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<Void> handleUploadTooLarge(MaxUploadSizeExceededException e) {
+        log.warn("上传体积超限：{}", e.getMessage());
+        return Result.fail(413, "图片太大了，请少选几张或压缩后再试");
     }
 
     @ExceptionHandler(Exception.class)
