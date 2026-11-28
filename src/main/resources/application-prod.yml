@@ -70,3 +70,13 @@ logging:
   level:
     root: info
     com.we.sharesystem: info
+
+# 生产默认关闭接口文档。swagger-ui 等于把全部接口和参数结构挂在公网上，
+# 对演示项目也没必要 —— 面试官要看，本地起一份或者临时开：
+#   SPRINGDOC_ENABLED=true docker compose up -d backend
+# 同时确认 nginx 没有把 /swagger-ui 反代出去（默认配置只反代 /api/ 与静态文件，天然进不来）。
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}

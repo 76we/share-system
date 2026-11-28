@@ -123,6 +123,17 @@
             <artifactId>metadata-extractor</artifactId>
             <version>2.19.0</version>
         </dependency>
+        <!-- 接口文档：启动时扫描 Controller 生成 OpenAPI 3 规范（/v3/api-docs），
+             并自带 Swagger UI（/swagger-ui/index.html）可以点着试接口。
+             注意只能用 springdoc，不能用 springfox —— springfox 依赖 javax.*，
+             在 Spring Boot 3（jakarta.*）上根本起不来。
+             版本 2.x 对应 Boot 3.x，这里与 Boot 3.2.10 匹配。 -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.6.0</version>
+        </dependency>
+
         <!-- lombok、validation、mybatis-plus 你项目已有就不用重复引 -->
 
 

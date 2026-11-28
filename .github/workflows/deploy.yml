@@ -33,8 +33,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # 放到 job 级 env 里，才能在下面的步骤里用 shell 判断有没有配。
+    # 注意：secrets 不能直接写在 job 的 if 条件里，只能用 env 转一手。
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+
     steps:
       - uses: actions/checkout@v4
+
+      # 服务器还没买 / Secrets 还没配的时候，不要一路跑到 ssh 报错 ——
+      # 那会在仓库里留下一个红色的 ✗，而失败原因只是「还没部署环境」。
+      # 这里先探一次，缺凭据就只做构建验证，把部署三步整体跳过。
+      - name: 检查部署凭据
+        id: precheck
+        run: |
+          if [ -z "${SSH_HOST}" ]; then
+            echo "::notice::未配置 SSH_HOST（服务器尚未就绪），本次只验证构建，不执行部署"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -50,6 +68,7 @@ jobs:
         run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: 配置 SSH
+        if: steps.precheck.outputs.ready == 'true'
         # 用专用部署密钥（只对这一个仓库的 deploy key），不要用日常登录的那把：
         # 这把私钥放在 GitHub Secrets 里，泄露等于把服务器交出去，
         # 专用密钥可以单独吊销，不影响你其他机器。
@@ -63,6 +82,7 @@ jobs:
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: 上传 jar
+        if: steps.precheck.outputs.ready == 'true'
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT || 22 }}" \
               "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
@@ -72,6 +92,7 @@ jobs:
               "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/share/target/"
 
       - name: 远程部署并健康检查
+        if: steps.precheck.outputs.ready == 'true'
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT || 22 }}" \
               "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \

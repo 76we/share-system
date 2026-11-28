@@ -17,6 +17,7 @@
 | 数据库迁移 | Flyway（`V1` → `V2`，禁止改历史脚本） |
 | 认证 | JWT（jjwt 0.11.5，无状态）+ Spring Security Crypto（BCrypt） |
 | 图片处理 | ImageIO + metadata-extractor（EXIF 方向转正、重编码、双尺寸） |
+| 接口文档 | springdoc-openapi 2.6.0（OpenAPI 3 + Swagger UI） |
 | 运维 | Docker Compose、nginx 反代、GitHub Actions、actuator health |
 
 ---
@@ -217,6 +218,19 @@ mvn spring-boot:run
 - 分页统一走 `PageParam`（页码从 1 开始）
 - 认证：请求头 `Authorization: Bearer <token>`，由 `interceptor` 校验，无状态
 
+### 在线接口文档
+
+启动后打开 **http://localhost:8080/swagger-ui/index.html**（规范原文 `/v3/api-docs`）。
+
+用法：先调 `POST /users/login` 拿 token → 点右上角 **Authorize** 填入（只填 token 本身，不要带 `Bearer ` 前缀）→ 之后所有请求自动带 `Authorization` 头，可以直接点 **Try it out** 试。
+
+两处设计说明：
+
+- **哪些接口公开，只维护一份。** `common/PublicEndpoints` 是唯一事实来源，`WebConfig` 的拦截器按它放行，`OpenApiConfig` 按同一份清单去掉文档里的锁标。分两处写会出真事：今天放行了一个接口忘了同步文档，页面上它带着锁，看的人以为要登录，试一下发现能通 —— 比没有文档更糟。
+- **生产默认关闭。** 文档等于把全部接口和参数结构挂在公网上，对演示项目也没必要。需要时用 `SPRINGDOC_ENABLED=true` 临时打开，并确认 nginx 没有把 `/swagger-ui` 反代出去（默认配置只反代 `/api/` 与静态文件，天然进不来）。
+
+> 只能用 springdoc，不能用 springfox —— 后者依赖 `javax.*`，在 Spring Boot 3（`jakarta.*`）上根本起不来，这是 Boot 3 升级时最常见的坑之一。
+
 ---
 
 ## 部署
@@ -249,7 +263,7 @@ mvn spring-boot:run
 mvn test
 ```
 
-5 个测试类、24 个用例：`JwtUtilTest`、`IpUtilTest`、`PageParamTest`、`SensitiveWordFilterTest`、`FileUtilTest`。
+6 个测试类、24 个用例：`JwtUtilTest`、`IpUtilTest`、`PageParamTest`、`SensitiveWordFilterTest`、`FileUtilTest`，以及 `ShareSystemApplicationTests`（加载完整的 Spring 上下文，能兜住 Bean 装配、配置绑定这类「编译通过但起不来」的问题）。
 
 `FileUtilTest` 用真实生成的图片验证四件事：
 
@@ -269,11 +283,11 @@ mvn test
 - 限流是 Redis 固定窗口，多实例之间计数共享，但固定窗口在窗口边界处允许双倍突发（换滑动窗口或令牌桶才能消除）
 - 图片存本地磁盘，水平扩展前必须先抽成对象存储接口
 - 未接入链路追踪与结构化日志，排查跨服务问题只能靠日志时间线
-- 没有接入 OpenAPI，接口文档目前只有本文件的功能表
+- 接口没有写 `@Operation` 描述，Swagger 上看到的是方法名和参数名，没有业务说明
 
 ## 后续计划
 
-- 引入 `springdoc-openapi`，让 60 个端点有可交互文档
 - 补压测数据（QPS / P95 / 连接池占用），确定单机容量上限
 - 补并发一致性测试（同一条动态并发点赞的最终计数）
 - 图片存储抽象成接口，支持本地磁盘 / 对象存储切换
+- 给核心接口补 `@Operation` / `@Schema`，让文档说出「这个接口干什么」而不只是「它叫什么」

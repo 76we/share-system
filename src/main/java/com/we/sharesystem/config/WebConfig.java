@@ -1,6 +1,7 @@
 package com.we.sharesystem.config;
 
 
+import com.we.sharesystem.common.PublicEndpoints;
 import com.we.sharesystem.interceptor.LoginInterceptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,28 +29,11 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // 放行清单统一放在 PublicEndpoints，接口文档那边读同一份，
+        // 避免「实际放行了、文档里还挂着锁」这种不同步
         registry.addInterceptor(loginInterceptor)
                 .addPathPatterns("/**")
-                .excludePathPatterns(
-                        "/users/register",
-                        "/users/login",
-                        // 注册邮箱验证码：未登录也必须能请求
-                        "/users/email-code",
-                        // 找回密码：未登录也必须能请求
-                        "/users/password-code",
-                        "/users/reset-password",
-                        "/moments/list",
-                        "/moments/search",
-                        "/likes/count",
-                        "/collects/count",
-                        "/images/**",
-                        // 健康检查：给 systemd / 外部监控用，不需要登录。
-                        // 只暴露 health（见 application.yml 的 management.endpoints）
-                        "/actuator/**",
-                        // 分享落地页必须匿名可访问：微信爬虫不会带 token
-                        "/share/**",
-                        "/error"
-                );
+                .excludePathPatterns(PublicEndpoints.PATTERNS);
     }
 
     @Override

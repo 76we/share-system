@@ -91,3 +91,16 @@ management:
     mail:
       enabled: false
 
+# 接口文档（Swagger UI）：/swagger-ui/index.html，规范原文 /v3/api-docs
+# 本地默认开，生产默认关（application-prod.yml 里覆盖成 false）。
+# 关掉的原因：文档等于把全部接口、参数结构、错误码公开，不该对公网可见。
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /swagger-ui.html
+    # 刻意不配 tags-sorter：分组顺序由 OpenApiConfig 里的中文分组表决定，
+    # 一旦按字母序排，中文名会被按 unicode 码点乱序，业务顺序就没了
+
